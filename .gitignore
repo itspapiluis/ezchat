@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+.DS_Store
+*.local
+
+# Environment variables (never commit these)
+.env
+.env.local
