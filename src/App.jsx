@@ -73,6 +73,14 @@ input::placeholder,textarea::placeholder{color:#3a3a3a}
 .pm-bubble.theirs{background:#161616;border:1px solid #241E10;border-radius:12px 12px 12px 3px;align-self:flex-start}
 .toast{position:fixed;bottom:24px;right:20px;background:#161616;border:1px solid #C9A84C44;border-left:3px solid #C9A84C;border-radius:10px;padding:12px 18px;font-size:13px;z-index:9999;animation:slideUp .3s ease;box-shadow:0 8px 32px rgba(0,0,0,0.6);max-width:300px}
 .ann-bar{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.mobile-only{display:none}
+.desktop-only{display:flex}
+@media(max-width:768px){
+  .mobile-only{display:flex}
+  .desktop-sidebar{display:none!important}
+  .desktop-only{display:none!important}
+  .mobile-chat-area{min-width:0!important;width:100%!important}
+}
 `;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -494,6 +502,7 @@ function ChatRoom({me,onLeave,showToast}){
   const [blockedIds,setBlockedIds]=useState([]);
   const [selectedImg,setSelectedImg]=useState(null);
   const [sideTab,setSideTab]=useState("users");
+  const [mobileTab,setMobileTab]=useState("chat");
   const [annIdx,setAnnIdx]=useState(0);
   const [announcements,setAnnouncements]=useState(["🥂 Welcome to EasyCart!"]);
   const [loadingMsgs,setLoadingMsgs]=useState(true);
@@ -662,8 +671,8 @@ function ChatRoom({me,onLeave,showToast}){
       </div>
 
       <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
-        {/* Left sidebar */}
-        <div style={{width:190,borderRight:`1px solid ${BORDER}`,background:SURFACE,display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",padding:"10px 6px"}}>
+        {/* Left sidebar - hidden on mobile */}
+        <div className="desktop-sidebar" style={{width:190,borderRight:`1px solid ${BORDER}`,background:SURFACE,display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",padding:"10px 6px"}}>
           <div style={{fontSize:10,color:GOLD,letterSpacing:1,padding:"2px 8px",marginBottom:8}}>ONLINE · {visibleUsers.length}</div>
           {visibleUsers.map(u=>(
             <div key={u.id} className="sidebar-item" onClick={()=>setShowProfile(u)} style={{display:"flex",alignItems:"center",gap:7,marginBottom:1}}>
@@ -759,8 +768,8 @@ function ChatRoom({me,onLeave,showToast}){
           </div>
         </div>
 
-        {/* Right sidebar */}
-        <div style={{width:210,borderLeft:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        {/* Right sidebar - hidden on mobile */}
+        <div className="desktop-sidebar" style={{width:210,borderLeft:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,flexShrink:0}}>
             {[["users","Guests"],["info","Venue"]].map(([v,l])=>(
               <button key={v} className={`tab-btn ${sideTab===v?"active":""}`} onClick={()=>setSideTab(v)}>{l}</button>
@@ -805,6 +814,67 @@ function ChatRoom({me,onLeave,showToast}){
           </div>
         </div>
       </div>
+
+      {/* Mobile bottom nav */}
+      <div className="mobile-only" style={{borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,flexDirection:"row",zIndex:10}}>
+        {[["chat","💬","Chat"],["guests","👥","Guests"],["venue","✦","Venue"]].map(([v,icon,label])=>(
+          <button key={v} onClick={()=>setMobileTab(v)} style={{flex:1,padding:"10px 4px 8px",background:"none",border:"none",borderTop:`2px solid ${mobileTab===v?GOLD:"transparent"}`,color:mobileTab===v?GOLD:"#444",fontFamily:"Inter,sans-serif",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s"}}>
+            <span style={{fontSize:18}}>{icon}</span>
+            <span style={{letterSpacing:.5}}>{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Mobile guests panel */}
+      {mobileTab==="guests"&&(
+        <div className="mobile-only" style={{position:"fixed",inset:0,background:BG,zIndex:150,flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"14px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE}}>
+            <span style={{fontWeight:600,fontSize:15,color:GOLD}}>Guests Online · {visibleUsers.length}</span>
+            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#666",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:12}}>
+            {visibleUsers.map(u=>(
+              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}} onClick={()=>{if(u.id!==me.id){setPmTarget(u);setMobileTab("chat");}}}>
+                <Avatar user={u} size={38}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14,fontWeight:500,color:u.id===me.id?GOLD:"#ccc"}}>{u.id===me.id?"You ("+u.name+")":u.name}</div>
+                  <div style={{fontSize:11,color:u.status==="away"?"#F59E0B":"#34D399",marginTop:2}}>{u.status||"online"}</div>
+                </div>
+                {u.id!==me.id&&<span style={{fontSize:12,color:GOLD_DIM,background:`rgba(201,168,76,0.08)`,padding:"4px 10px",borderRadius:8,border:`1px solid ${GOLD_DIM}44`}}>DM</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Mobile venue panel */}
+      {mobileTab==="venue"&&(
+        <div className="mobile-only" style={{position:"fixed",inset:0,background:BG,zIndex:150,flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"14px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE}}>
+            <span style={{fontWeight:600,fontSize:15,color:GOLD}}>Venue Info</span>
+            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#666",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+          </div>
+          <div style={{flex:1,overflowY:"auto",padding:16}}>
+            <div style={{textAlign:"center",padding:"20px 0 24px"}}>
+              <img src={LOGO_SRC} alt="EasyCart" style={{width:64,height:64,objectFit:"contain",background:"#fff",borderRadius:14,padding:5,marginBottom:10}}/>
+              <div style={{fontSize:16,fontWeight:700,color:"#e8e0d0"}}>EasyCart</div>
+              <div style={{fontSize:13,color:"#555"}}>Barcade & Lounge</div>
+              <div style={{fontSize:12,color:"#333",marginTop:3}}>{VENUE_LOCATION}</div>
+            </div>
+            <div style={{height:1,background:BORDER,marginBottom:16}}/>
+            <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>TONIGHT</div>
+            {announcements.map((a,i)=>(
+              <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"12px 14px",marginBottom:8,fontSize:13,lineHeight:1.6,color:"#ccc"}}>{a}</div>
+            ))}
+            <div style={{fontSize:11,color:"#444",letterSpacing:1,margin:"18px 0 10px"}}>VENUE INFO</div>
+            <div style={{fontSize:13,color:"#555",lineHeight:2.2}}>
+              <div>📍 {VENUE_LOCATION}</div>
+              <div>🔒 Wi-Fi secured chat</div>
+              <div>🍸 Hidden Bar inside</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showProfile&&<ProfileCard user={showProfile} me={me} onClose={()=>setShowProfile(null)} onDM={()=>{setPmTarget(showProfile);setShowProfile(null);}} onBlock={()=>blockUser(showProfile.id)} onReport={reportUser}/>}
       {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>setPmTarget(null)}/>}
