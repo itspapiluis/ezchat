@@ -771,11 +771,9 @@ function ChatRoom({me,onLeave,showToast}){
             {[
               {value:"male",emoji:"👨"},
               {value:"female",emoji:"👩"},
-              {value:"gay",emoji:"🏳️‍🌈"},
-              {value:"lesbian",emoji:"🏳️‍🌈"},
-              {value:"bisexual",emoji:"💜"},
-              {value:"trans",emoji:"⚧️"},
-              {value:"nonbinary",emoji:"🌈"},
+              {value:"gay","lesbian","trans","nonbinary", "bisexual",emoji:"🏳️‍🌈"},
+        
+  
               {value:"prefer_not",emoji:"🤐"},
             ].map(g=>{
               const count=visibleUsers.filter(u=>u.gender===g.value).length;
