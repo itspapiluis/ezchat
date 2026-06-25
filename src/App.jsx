@@ -769,17 +769,15 @@ function ChatRoom({me,onLeave,showToast}){
           </div>
           <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
             {[
-              {value:"male",emoji:"👨"},
-              {value:"female",emoji:"👩"},
-              {value:"gay","lesbian","trans","nonbinary", "bisexual",emoji:"🏳️‍🌈"},
-        
-  
-              {value:"prefer_not",emoji:"🤐"},
+              {label:"male",   emoji:"👨", test:u=>u.gender==="male"},
+              {label:"female", emoji:"👩", test:u=>u.gender==="female"},
+              {label:"lgbtq",  emoji:"🏳️‍🌈", test:u=>["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)},
+              {label:"prefer", emoji:"🤐", test:u=>u.gender==="prefer_not"},
             ].map(g=>{
-              const count=visibleUsers.filter(u=>u.gender===g.value).length;
+              const count=visibleUsers.filter(g.test).length;
               if(count===0)return null;
               return(
-                <div key={g.value} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"2px 7px",fontSize:11,display:"flex",alignItems:"center",gap:3}}>
+                <div key={g.label} title={g.label==="lgbtq"?"LGBTQ+":g.label} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"2px 7px",fontSize:11,display:"flex",alignItems:"center",gap:3}}>
                   <span>{g.emoji}</span><span style={{color:"#888"}}>{count}</span>
                 </div>
               );
@@ -800,7 +798,12 @@ function ChatRoom({me,onLeave,showToast}){
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:12,fontWeight:u.id===me.id?600:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:u.id===me.id?"#C9A84C":"#ccc",display:"flex",alignItems:"center",gap:4}}>
                   <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}{u.id===me.id?" ✦":""}</span>
-                  {u.gender&&<span style={{fontSize:11,flexShrink:0}}>{GENDERS.find(g=>g.value===u.gender)?.emoji}</span>}
+                  {u.gender&&<span style={{fontSize:11,flexShrink:0}}>{
+                    u.gender==="male"?"👨":
+                    u.gender==="female"?"👩":
+                    u.gender==="prefer_not"?"🤐":
+                    ["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)?"🏳️‍🌈":""
+                  }</span>}
                 </div>
               </div>
               <div className={`online-dot ${u.status==="away"?"away":""}`} style={{width:6,height:6}}/>
