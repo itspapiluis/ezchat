@@ -20,6 +20,18 @@ const VENUE_WIFI = "EasyCart_VIP";
 const VENUE_NAME = "EasyCart Barcade & Lounge";
 const VENUE_LOCATION = "Catarman, Northern Samar";
 const ROOM_ID = "easycart-main";
+const VENUE_ACCESS_CODE = "EASYCART2025"; // Staff can change this anytime
+
+const GENDERS = [
+  {value:"male",    label:"Male",             emoji:"👨"},
+  {value:"female",  label:"Female",           emoji:"👩"},
+  {value:"gay",     label:"Gay",              emoji:"🏳️‍🌈"},
+  {value:"lesbian", label:"Lesbian",          emoji:"🏳️‍🌈"},
+  {value:"bisexual",label:"Bisexual",         emoji:"💜"},
+  {value:"trans",   label:"Transgender",      emoji:"⚧️"},
+  {value:"nonbinary",label:"Non-Binary",      emoji:"🌈"},
+  {value:"prefer_not",label:"Prefer not to say",emoji:"🤐"},
+];
 
 const PROFANITY = ["badword1","badword2"];
 const filterMsg = (t) => PROFANITY.reduce((s,w)=>s.replace(new RegExp(w,"gi"),"***"),t);
@@ -274,26 +286,53 @@ function Landing({onJoin}){
 
 // ── Entry screen ──────────────────────────────────────────────────────────────
 function Entry({onEnter,wifiOk}){
-  const [name,setName]=useState("");
+  const [step,setStep]=useState("access"); // "access" | "profile"
+  const [accessCode,setAccessCode]=useState("");
+  const [accessError,setAccessError]=useState("");
+  const [nickname,setNickname]=useState("");
+  const [firstName,setFirstName]=useState("");
+  const [lastName,setLastName]=useState("");
+  const [gender,setGender]=useState("");
   const [color,setColor]=useState(COLORS[0]);
   const [agreed,setAgreed]=useState(false);
   const [showGuide,setShowGuide]=useState(false);
   const [error,setError]=useState("");
   const [loading,setLoading]=useState(false);
 
+  const checkCode=()=>{
+    if(accessCode.trim().toUpperCase()===VENUE_ACCESS_CODE){
+      setStep("profile");
+      setAccessError("");
+    } else {
+      setAccessError("Incorrect code. Please ask staff for the access code.");
+    }
+  };
+
   const submit=async()=>{
-    if(!name.trim()){setError("Please enter a nickname");return;}
+    if(!nickname.trim()){setError("Please enter a nickname");return;}
+    if(!firstName.trim()||!lastName.trim()){setError("Please enter your full name");return;}
+    if(!gender){setError("Please select your gender");return;}
     if(!agreed){setError("Please accept the community guidelines");return;}
     setLoading(true);
     try{
       const userId=randomId();
+      const genderInfo=GENDERS.find(g=>g.value===gender);
       const {data,error:err}=await supabase.from("users").insert({
-        id:userId, name:name.trim(), color, room_id:ROOM_ID, status:"online", last_seen:new Date().toISOString()
+        id:userId,
+        name:nickname.trim(),
+        first_name:firstName.trim(),
+        last_name:lastName.trim(),
+        gender:gender,
+        color,
+        room_id:ROOM_ID,
+        status:"online",
+        last_seen:new Date().toISOString()
       }).select().single();
       if(err)throw err;
-      // Post join notification
       await supabase.from("messages").insert({
-        room_id:ROOM_ID, user_id:userId, text:`${name.trim()} joined the chat 👋`, type:"system"
+        room_id:ROOM_ID, user_id:userId,
+        text:`${nickname.trim()} joined the chat ${genderInfo?.emoji||"👋"}`,
+        type:"system"
       });
       onEnter(data);
     }catch(e){
@@ -318,40 +357,100 @@ function Entry({onEnter,wifiOk}){
     </div>
   );
 
-  return(
+  // ── STEP 1: Access Code Screen ──
+  if(step==="access") return(
     <div style={{height:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:BG,padding:20,position:"relative",overflow:"hidden"}}>
       <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse 70% 50% at 50% 45%,rgba(201,168,76,0.07) 0%,transparent 65%)",pointerEvents:"none"}}/>
-      <div className="glass slide-up" style={{width:"100%",maxWidth:420,borderRadius:20,padding:"36px 32px",position:"relative",zIndex:1}}>
-        <div style={{textAlign:"center",marginBottom:28}}>
-          <img src={LOGO_SRC} alt="EasyCart" style={{width:72,height:72,objectFit:"contain",background:"#fff",borderRadius:14,padding:5,marginBottom:12}}/>
-          <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:26,fontWeight:900,marginBottom:4}} className="gold-text">Join the Chat</h1>
+      <div className="glass slide-up" style={{width:"100%",maxWidth:400,borderRadius:20,padding:"36px 28px",position:"relative",zIndex:1,textAlign:"center"}}>
+        <img src={LOGO_SRC} alt="EasyCart" style={{width:68,height:68,objectFit:"contain",background:"#fff",borderRadius:14,padding:5,marginBottom:16}}/>
+        <div style={{fontSize:32,marginBottom:8}}>🔐</div>
+        <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:900,marginBottom:6}} className="gold-text">Access Code</h1>
+        <p style={{color:"#555",fontSize:13,marginBottom:24,lineHeight:1.6}}>Ask EasyCart staff for tonight's access code to join the chat.</p>
+        <input
+          value={accessCode}
+          onChange={e=>setAccessCode(e.target.value.toUpperCase())}
+          onKeyDown={e=>e.key==="Enter"&&checkCode()}
+          placeholder="Enter access code"
+          style={{width:"100%",padding:"13px 14px",fontSize:18,letterSpacing:3,textAlign:"center",marginBottom:14,borderRadius:10,fontWeight:700}}
+          maxLength={20}
+        />
+        {accessError&&<div style={{background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:8,padding:"9px 13px",fontSize:13,color:"#F87171",marginBottom:14}}>{accessError}</div>}
+        <button className="btn-gold" onClick={checkCode} style={{width:"100%",padding:13,fontSize:15,borderRadius:10}}>
+          Verify Code ✦
+        </button>
+        <p style={{fontSize:11,color:"#333",marginTop:16}}>🔒 This ensures only EasyCart guests can join</p>
+      </div>
+    </div>
+  );
+
+  // ── STEP 2: Profile Setup Screen ──
+  return(
+    <div style={{height:"100dvh",overflowY:"auto",display:"flex",alignItems:"flex-start",justifyContent:"center",background:BG,padding:20,position:"relative"}}>
+      <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse 70% 50% at 50% 30%,rgba(201,168,76,0.07) 0%,transparent 65%)",pointerEvents:"none"}}/>
+      <div className="glass slide-up" style={{width:"100%",maxWidth:440,borderRadius:20,padding:"32px 28px",position:"relative",zIndex:1,margin:"20px 0"}}>
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <img src={LOGO_SRC} alt="EasyCart" style={{width:60,height:60,objectFit:"contain",background:"#fff",borderRadius:12,padding:4,marginBottom:10}}/>
+          <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:900,marginBottom:4}} className="gold-text">Set Up Your Profile</h1>
           <p style={{color:"#555",fontSize:13}}>{VENUE_NAME}</p>
         </div>
 
-        <div style={{marginBottom:18}}>
-          <label style={{fontSize:11,color:"#666",letterSpacing:1,display:"block",marginBottom:7}}>YOUR NICKNAME</label>
-          <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="What should we call you?" style={{width:"100%",padding:"11px 14px",fontSize:15}} maxLength={24}/>
+        {/* Real name - private */}
+        <div style={{background:`rgba(201,168,76,0.05)`,border:`1px solid ${GOLD_DIM}33`,borderRadius:12,padding:"14px 16px",marginBottom:18}}>
+          <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+            🔒 REAL NAME <span style={{color:"#444",fontWeight:400,letterSpacing:0,fontSize:10}}>— private, only seen by venue staff</span>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <div style={{flex:1}}>
+              <input value={firstName} onChange={e=>setFirstName(e.target.value)} placeholder="First name" style={{width:"100%",padding:"10px 12px",fontSize:14}}/>
+            </div>
+            <div style={{flex:1}}>
+              <input value={lastName} onChange={e=>setLastName(e.target.value)} placeholder="Last name" style={{width:"100%",padding:"10px 12px",fontSize:14}}/>
+            </div>
+          </div>
         </div>
 
-        <div style={{marginBottom:22}}>
+        {/* Nickname - public */}
+        <div style={{marginBottom:18}}>
+          <label style={{fontSize:11,color:"#666",letterSpacing:1,display:"block",marginBottom:7}}>
+            NICKNAME <span style={{color:"#444",fontWeight:400,letterSpacing:0,fontSize:10}}>— shown in chat</span>
+          </label>
+          <input value={nickname} onChange={e=>setNickname(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submit()} placeholder="What should others call you?" style={{width:"100%",padding:"11px 14px",fontSize:15}} maxLength={24}/>
+        </div>
+
+        {/* Gender */}
+        <div style={{marginBottom:18}}>
+          <label style={{fontSize:11,color:"#666",letterSpacing:1,display:"block",marginBottom:10}}>GENDER</label>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+            {GENDERS.map(g=>(
+              <button key={g.value} onClick={()=>setGender(g.value)} style={{padding:"10px 8px",borderRadius:10,border:`1px solid ${gender===g.value?GOLD:BORDER}`,background:gender===g.value?`rgba(201,168,76,0.12)`:SURFACE2,color:gender===g.value?GOLD:"#888",cursor:"pointer",fontSize:13,fontFamily:"Inter,sans-serif",display:"flex",alignItems:"center",gap:8,transition:"all .15s",fontWeight:gender===g.value?600:400}}>
+                <span style={{fontSize:16}}>{g.emoji}</span>{g.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Avatar color */}
+        <div style={{marginBottom:20}}>
           <label style={{fontSize:11,color:"#666",letterSpacing:1,display:"block",marginBottom:9}}>AVATAR COLOR</label>
           <div style={{display:"flex",gap:9,flexWrap:"wrap"}}>
             {COLORS.map(c=>(
               <div key={c} onClick={()=>setColor(c)} style={{width:30,height:30,borderRadius:"50%",background:c,cursor:"pointer",border:color===c?"3px solid #fff":"3px solid transparent",transition:"transform .15s",transform:color===c?"scale(1.2)":"scale(1)",boxShadow:color===c?`0 0 10px ${c}66`:"none"}}/>
             ))}
           </div>
-          <div style={{marginTop:12,display:"flex",alignItems:"center",gap:9}}>
-            <div style={{width:38,height:38,borderRadius:"50%",background:`linear-gradient(135deg,${color},${color}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#080808",fontSize:12,border:`2px solid ${color}55`}}>{name?initials(name):"?"}</div>
-            <span style={{fontSize:12,color:"#444"}}>{name||"Your preview"}</span>
+          <div style={{marginTop:10,display:"flex",alignItems:"center",gap:9}}>
+            <div style={{width:36,height:36,borderRadius:"50%",background:`linear-gradient(135deg,${color},${color}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,color:"#080808",fontSize:12,border:`2px solid ${color}55`}}>{nickname?initials(nickname):"?"}</div>
+            <span style={{fontSize:12,color:"#444"}}>{nickname||"Your preview"}</span>
+            {gender&&<span style={{fontSize:16}}>{GENDERS.find(g=>g.value===gender)?.emoji}</span>}
           </div>
         </div>
 
-        <div style={{marginBottom:22,display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"}} onClick={()=>setAgreed(a=>!a)}>
+        {/* Guidelines */}
+        <div style={{marginBottom:18,display:"flex",alignItems:"flex-start",gap:10,cursor:"pointer"}} onClick={()=>setAgreed(a=>!a)}>
           <div style={{width:19,height:19,borderRadius:5,border:`1px solid ${agreed?GOLD:BORDER}`,background:agreed?`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`:"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s",marginTop:1}}>
             {agreed&&<span style={{fontSize:11,color:"#080808",fontWeight:800}}>✓</span>}
           </div>
           <p style={{fontSize:13,color:"#555",lineHeight:1.55}}>
-            I agree to the <span style={{color:GOLD,cursor:"pointer",textDecoration:"underline"}} onClick={e=>{e.stopPropagation();setShowGuide(true);}}>Community Guidelines</span>
+            I agree to the <span style={{color:GOLD,cursor:"pointer",textDecoration:"underline"}} onClick={e=>{e.stopPropagation();setShowGuide(true);}}>Community Guidelines</span>. This chat may be monitored for safety.
           </p>
         </div>
 
@@ -360,6 +459,7 @@ function Entry({onEnter,wifiOk}){
         <button className="btn-gold" onClick={submit} disabled={loading} style={{width:"100%",padding:13,fontSize:15,borderRadius:10,opacity:loading?.7:1}}>
           {loading?"Connecting…":"Enter the Room ✦"}
         </button>
+        <button onClick={()=>setStep("access")} style={{width:"100%",marginTop:10,padding:10,background:"none",border:"none",color:"#444",fontSize:13,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>← Back</button>
       </div>
 
       {showGuide&&(
@@ -662,9 +762,31 @@ function ChatRoom({me,onLeave,showToast}){
             📢 {announcements[annIdx]}
           </div>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-          <div className="online-dot"/>
-          <span style={{fontSize:11,color:"#555",whiteSpace:"nowrap"}}>{visibleUsers.length} online</span>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <div style={{display:"flex",alignItems:"center",gap:5}}>
+            <div className="online-dot"/>
+            <span style={{fontSize:11,color:"#555",whiteSpace:"nowrap"}}>{visibleUsers.length} online</span>
+          </div>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {[
+              {value:"male",emoji:"👨"},
+              {value:"female",emoji:"👩"},
+              {value:"gay",emoji:"🏳️‍🌈"},
+              {value:"lesbian",emoji:"🏳️‍🌈"},
+              {value:"bisexual",emoji:"💜"},
+              {value:"trans",emoji:"⚧️"},
+              {value:"nonbinary",emoji:"🌈"},
+              {value:"prefer_not",emoji:"🤐"},
+            ].map(g=>{
+              const count=visibleUsers.filter(u=>u.gender===g.value).length;
+              if(count===0)return null;
+              return(
+                <div key={g.value} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"2px 7px",fontSize:11,display:"flex",alignItems:"center",gap:3}}>
+                  <span>{g.emoji}</span><span style={{color:"#888"}}>{count}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
         <Avatar user={me} size={28}/>
         <button className="btn-ghost" onClick={onLeave} style={{padding:"5px 11px",fontSize:11,flexShrink:0}}>Leave</button>
@@ -678,7 +800,10 @@ function ChatRoom({me,onLeave,showToast}){
             <div key={u.id} className="sidebar-item" onClick={()=>setShowProfile(u)} style={{display:"flex",alignItems:"center",gap:7,marginBottom:1}}>
               <Avatar user={u} size={26}/>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,fontWeight:u.id===me.id?600:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:u.id===me.id?"#C9A84C":"#ccc"}}>{u.name}{u.id===me.id?" ✦":""}</div>
+                <div style={{fontSize:12,fontWeight:u.id===me.id?600:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:u.id===me.id?"#C9A84C":"#ccc",display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}{u.id===me.id?" ✦":""}</span>
+                  {u.gender&&<span style={{fontSize:11,flexShrink:0}}>{GENDERS.find(g=>g.value===u.gender)?.emoji}</span>}
+                </div>
               </div>
               <div className={`online-dot ${u.status==="away"?"away":""}`} style={{width:6,height:6}}/>
             </div>
