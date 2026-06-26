@@ -20,7 +20,7 @@ const VENUE_WIFI = "EasyCart_VIP";
 const VENUE_NAME = "EasyCart Barcade & Lounge";
 const VENUE_LOCATION = "Catarman, Northern Samar";
 const ROOM_ID = "easycart-main";
-const VENUE_ACCESS_CODE = "EASYCART2025"; // Staff can change this anytime
+// Access code is loaded from Supabase (managed in Admin Panel)
 
 const GENDERS = [
   {value:"male",    label:"Male",             emoji:"👨"},
@@ -394,12 +394,19 @@ function Entry({onEnter,wifiOk}){
   const [error,setError]=useState("");
   const [loading,setLoading]=useState(false);
 
-  const checkCode=()=>{
-    if(accessCode.trim().toUpperCase()===VENUE_ACCESS_CODE){
-      setStep("profile");
-      setAccessError("");
-    } else {
-      setAccessError("Incorrect code. Please ask staff for the access code.");
+  const checkCode=async()=>{
+    if(!accessCode.trim()){setAccessError("Please enter the access code.");return;}
+    try{
+      const {data,error}=await supabase.from("settings").select("value").eq("key","access_code").single();
+      const correct=((error||!data?.value)?"EASYCART2025":data.value).trim().toUpperCase();
+      if(accessCode.trim().toUpperCase()===correct){
+        setStep("profile");
+        setAccessError("");
+      } else {
+        setAccessError("Incorrect code. Please ask staff for the access code.");
+      }
+    }catch(e){
+      setAccessError("Could not verify code. Check your Wi-Fi and try again.");
     }
   };
 
@@ -774,6 +781,9 @@ function ChatRoom({me,onLeave,showToast,notifications}){
       })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"messages",filter:`room_id=eq.${ROOM_ID}`},payload=>{
         setMessages(p=>p.map(m=>m.id===payload.new.id?{...m,...payload.new}:m));
+      })
+      .on("postgres_changes",{event:"DELETE",schema:"public",table:"messages",filter:`room_id=eq.${ROOM_ID}`},payload=>{
+        setMessages(p=>p.filter(m=>m.id!==payload.old.id));
       })
       .subscribe();
     return()=>supabase.removeChannel(ch);
@@ -1275,6 +1285,8 @@ function AdminPanel({onLogout}){
   const [blockedWords,setBlockedWords]=useState([]);
   const [newAnn,setNewAnn]=useState("");
   const [newWord,setNewWord]=useState("");
+  const [accessCodeSetting,setAccessCodeSetting]=useState("");
+  const [accessCodeLoading,setAccessCodeLoading]=useState(false);
   const [confirmLogout,setConfirmLogout]=useState(false);
   const [confirmClear,setConfirmClear]=useState(false);
   const {toasts,show:showToast}=useToast();
@@ -1292,7 +1304,21 @@ function AdminPanel({onLogout}){
 
   const FIL_SLANG=["putangina","gago","tangina","bobo","tanga","ulol","bwisit","puta","leche","hudas","buwisit","inutil","engot","lintik","hayop","pakyu","tarantado","gunggong","mangmang","buang","yawa","bogo","piste","ungo"];
 
-  useEffect(()=>{loadAll();},[]);
+  useEffect(()=>{loadAll();loadAccessCode();},[]);
+
+  const loadAccessCode=async()=>{
+    const {data}=await supabase.from("settings").select("value").eq("key","access_code").single();
+    if(data?.value)setAccessCodeSetting(data.value);
+  };
+
+  const saveAccessCode=async()=>{
+    if(!accessCodeSetting.trim())return;
+    setAccessCodeLoading(true);
+    const {error}=await supabase.from("settings").upsert({key:"access_code",value:accessCodeSetting.trim().toUpperCase()},{onConflict:"key"});
+    setAccessCodeLoading(false);
+    if(error){showToast("Error saving: "+error.message);return;}
+    showToast("Access code updated ❆");
+  };
 
   const loadAll=async()=>{
     // Load users
@@ -1427,7 +1453,7 @@ function AdminPanel({onLogout}){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
-        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"]].map(([v,l])=>(
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -1613,6 +1639,32 @@ function AdminPanel({onLogout}){
         )}
 
       </div>
+
+      {/* ── SETTINGS ── */}
+      {tab==="settings"&&(
+        <div style={{maxWidth:700,margin:"0 auto"}}>
+          <div className="glass" style={{borderRadius:14,padding:20,marginBottom:16}}>
+            <div style={{fontSize:11,color:"#C9A84C",letterSpacing:1,marginBottom:6}}>ACCESS CODE</div>
+            <p style={{fontSize:12,color:"#555",marginBottom:14,lineHeight:1.6}}>
+              This is the code guests must enter to join the chat. Change it anytime — guests with the old code will not be re-verified until they rejoin.
+            </p>
+            <div style={{display:"flex",gap:8}}>
+              <input
+                value={accessCodeSetting}
+                onChange={e=>setAccessCodeSetting(e.target.value.toUpperCase())}
+                onKeyDown={e=>e.key==="Enter"&&saveAccessCode()}
+                placeholder="e.g. EASYCART2025"
+                style={{flex:1,padding:"11px 14px",fontSize:16,letterSpacing:3,fontWeight:700,borderRadius:8,textTransform:"uppercase"}}
+                maxLength={30}
+              />
+              <button className="btn-gold" onClick={saveAccessCode} disabled={accessCodeLoading} style={{padding:"11px 20px",fontSize:13,borderRadius:8,opacity:accessCodeLoading?.7:1}}>
+                {accessCodeLoading?"Saving…":"Save ❆"}
+              </button>
+            </div>
+            <p style={{fontSize:11,color:"#2a2a2a",marginTop:10}}>🔒 Stored securely in your database — not hardcoded</p>
+          </div>
+        </div>
+      )}
 
       {/* Confirm clear modal */}
       {confirmClear&&(
