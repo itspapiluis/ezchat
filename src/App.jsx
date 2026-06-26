@@ -813,9 +813,32 @@ function ChatRoom({me,onLeave,showToast,notifications}){
     return()=>supabase.removeChannel(ch);
   },[me.id,pmTarget,users]);
 
+  // ── Watch for kick/block by staff ──
+  useEffect(()=>{
+    const ch=supabase.channel(`user-status-${me.id}`)
+      .on("postgres_changes",{
+        event:"UPDATE",
+        schema:"public",
+        table:"users",
+        filter:`id=eq.${me.id}`
+      },payload=>{
+        const status=payload.new.status;
+        if(status==="blocked"){
+          onLeave("blocked");
+        } else if(status==="kicked"){
+          onLeave("kicked");
+        }
+      })
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[me.id]);
+
   // ── Heartbeat — keep user online ──
   useEffect(()=>{
     const beat=async()=>{
+      // Only heartbeat if not blocked/kicked
+      const {data}=await supabase.from("users").select("status").eq("id",me.id).single();
+      if(data&&(data.status==="blocked"||data.status==="kicked"))return;
       await supabase.from("users").update({last_seen:new Date().toISOString(),status:"online"}).eq("id",me.id);
     };
     beat();
@@ -857,6 +880,12 @@ function ChatRoom({me,onLeave,showToast,notifications}){
   // ── Send message ──
   const sendMsg=async()=>{
     if(!input.trim())return;
+    // Check if user is still allowed
+    const {data:statusCheck}=await supabase.from("users").select("status").eq("id",me.id).single();
+    if(statusCheck&&(statusCheck.status==="blocked"||statusCheck.status==="kicked")){
+      onLeave(statusCheck.status);
+      return;
+    }
     const text=filterMsg(input.trim(),blockedWordsList);
     setInput("");
     broadcastTyping(false);
@@ -1266,78 +1295,117 @@ function AdminPanel({onLogout}){
   useEffect(()=>{loadAll();},[]);
 
   const loadAll=async()=>{
-    const {data:u}=await supabase.from("users").select("*").eq("room_id",ROOM_ID).order("created_at",{ascending:false});
+    // Load users
+    const {data:u,error:ue}=await supabase.from("users").select("*").eq("room_id",ROOM_ID).order("created_at",{ascending:false});
     if(u)setUsers(u);
-    const {data:m}=await supabase.from("messages").select("*, users(name,color)").eq("room_id",ROOM_ID).order("created_at",{ascending:false}).limit(50);
-    if(m)setMessages(m);
+    // Load messages separately then merge with user data
+    const {data:m,error:me}=await supabase.from("messages").select("*").eq("room_id",ROOM_ID).order("created_at",{ascending:false}).limit(100);
+    if(m){
+      // Attach user info from already-loaded users
+      const usersMap={};
+      if(u)u.forEach(usr=>usersMap[usr.id]=usr);
+      setMessages(m.map(msg=>({...msg,users:usersMap[msg.user_id]||null})));
+    }
+    // Load announcements
     const {data:a}=await supabase.from("announcements").select("*").eq("room_id",ROOM_ID).order("pinned",{ascending:false}).order("created_at",{ascending:false});
     if(a)setAnnouncements(a);
+    // Load blocked words
     const {data:w}=await supabase.from("blocked_words").select("*").order("created_at",{ascending:true});
     if(w)setBlockedWords(w);
   };
 
-  // Announcements
+  // ── Announcements ──
   const postAnn=async(text)=>{
     if(!text.trim())return;
-    await supabase.from("announcements").insert({room_id:ROOM_ID,text:text.trim(),pinned:false});
+    const {error}=await supabase.from("announcements").insert({room_id:ROOM_ID,text:text.trim(),pinned:false});
+    if(error){showToast("Error: "+error.message);return;}
     setNewAnn("");
     showToast("Announcement posted ✦");
     loadAll();
   };
   const deleteAnn=async(id)=>{
-    await supabase.from("announcements").delete().eq("id",id);
+    const {error}=await supabase.from("announcements").delete().eq("id",id);
+    if(error){showToast("Error: "+error.message);return;}
+    setAnnouncements(p=>p.filter(a=>a.id!==id));
     showToast("Announcement removed");
-    loadAll();
   };
   const togglePin=async(id,pinned)=>{
-    await supabase.from("announcements").update({pinned:!pinned}).eq("id",id);
-    loadAll();
+    const {error}=await supabase.from("announcements").update({pinned:!pinned}).eq("id",id);
+    if(error){showToast("Error: "+error.message);return;}
+    setAnnouncements(p=>p.map(a=>a.id===id?{...a,pinned:!pinned}:a));
   };
 
-  // Users
+  // ── Users ──
   const kickUser=async(u)=>{
-    await supabase.from("users").update({status:"offline"}).eq("id",u.id);
+    const {error}=await supabase.from("users").update({status:"kicked"}).eq("id",u.id);
+    if(error){showToast("Error kicking: "+error.message);return;}
     await supabase.from("messages").insert({room_id:ROOM_ID,user_id:u.id,text:`${u.name} was removed from the chat by staff.`,type:"system"});
-    showToast(`${u.name} kicked`);
-    loadAll();
+    setUsers(p=>p.map(x=>x.id===u.id?{...x,status:"kicked"}:x));
+    showToast(`${u.name} kicked ✦`);
   };
   const blockUser=async(u)=>{
-    await supabase.from("users").update({status:"blocked"}).eq("id",u.id);
+    const {error}=await supabase.from("users").update({status:"blocked"}).eq("id",u.id);
+    if(error){showToast("Error blocking: "+error.message);return;}
     await supabase.from("messages").insert({room_id:ROOM_ID,user_id:u.id,text:`${u.name} was blocked by staff.`,type:"system"});
-    showToast(`${u.name} blocked`);
-    loadAll();
+    setUsers(p=>p.map(x=>x.id===u.id?{...x,status:"blocked"}:x));
+    showToast(`${u.name} blocked ✦`);
+  };
+  const unblockUser=async(u)=>{
+    const {error}=await supabase.from("users").update({status:"offline"}).eq("id",u.id);
+    if(error){showToast("Error: "+error.message);return;}
+    setUsers(p=>p.map(x=>x.id===u.id?{...x,status:"offline"}:x));
+    showToast(`${u.name} unblocked`);
   };
 
-  // Messages
+  // ── Messages ──
   const deleteMsg=async(id)=>{
-    await supabase.from("messages").delete().eq("id",id);
-    showToast("Message deleted");
-    loadAll();
+    // Optimistically remove from UI first
+    setMessages(p=>p.filter(m=>m.id!==id));
+    const {error}=await supabase.from("messages").delete().eq("id",id);
+    if(error){
+      showToast("Delete failed: "+error.message);
+      loadAll(); // reload to restore
+      return;
+    }
+    showToast("Message deleted ✦");
   };
   const clearAllMsgs=async()=>{
-    await supabase.from("messages").delete().eq("room_id",ROOM_ID);
+    const {error}=await supabase.from("messages").delete().neq("id",0).eq("room_id",ROOM_ID);
+    if(error){
+      // Try alternative approach
+      const {data:allMsgs}=await supabase.from("messages").select("id").eq("room_id",ROOM_ID);
+      if(allMsgs&&allMsgs.length>0){
+        for(const m of allMsgs){
+          await supabase.from("messages").delete().eq("id",m.id);
+        }
+      }
+    }
+    setMessages([]);
     setConfirmClear(false);
-    showToast("All messages cleared");
-    loadAll();
+    showToast("All messages cleared ✦");
   };
 
-  // Word filter
+  // ── Word filter ──
   const addWord=async(word)=>{
     if(!word.trim())return;
-    await supabase.from("blocked_words").insert({word:word.trim().toLowerCase()});
+    const {error}=await supabase.from("blocked_words").insert({word:word.trim().toLowerCase()});
+    if(error){showToast("Error: "+error.message);return;}
     setNewWord("");
-    showToast(`"${word}" added to filter`);
-    loadAll();
+    setBlockedWords(p=>[...p,{id:Date.now(),word:word.trim().toLowerCase()}]);
+    showToast(`"${word}" added to filter ✦`);
   };
   const removeWord=async(id)=>{
-    await supabase.from("blocked_words").delete().eq("id",id);
-    loadAll();
+    setBlockedWords(p=>p.filter(w=>w.id!==id));
+    const {error}=await supabase.from("blocked_words").delete().eq("id",id);
+    if(error)showToast("Error: "+error.message);
   };
   const addFilipino=async()=>{
+    let added=0;
     for(const w of FIL_SLANG){
-      await supabase.from("blocked_words").upsert({word:w},{onConflict:"word"});
+      const {error}=await supabase.from("blocked_words").upsert({word:w},{onConflict:"word"});
+      if(!error)added++;
     }
-    showToast("Filipino slang filter added ✦");
+    showToast(`Filipino slang filter added — ${added} words ✦`);
     loadAll();
   };
 
@@ -1465,19 +1533,29 @@ function AdminPanel({onLogout}){
                   <div style={{fontSize:11,color:"#555",marginTop:2}}>{u.first_name} {u.last_name} · {u.gender||"not set"}</div>
                   <div style={{fontSize:10,color:u.status==="online"?"#34D399":u.status==="blocked"?"#F87171":"#555",marginTop:2,textTransform:"uppercase",letterSpacing:.5}}>{u.status}</div>
                 </div>
-                {u.status!=="blocked"&&(
-                  <div style={{display:"flex",gap:6,flexShrink:0}}>
-                    <button onClick={()=>kickUser(u)} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#F59E0B",fontSize:11,fontFamily:"Inter,sans-serif",transition:"all .15s"}}
-                      onMouseEnter={e=>e.currentTarget.style.borderColor="#F59E0B"}
-                      onMouseLeave={e=>e.currentTarget.style.borderColor=BORDER}>
-                      Kick
+                <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                  {u.status==="online"&&<>
+                    <button onClick={()=>kickUser(u)} style={{background:SURFACE2,border:`1px solid #F59E0B44`,borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#F59E0B",fontSize:11,fontFamily:"Inter,sans-serif",transition:"all .15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="rgba(245,158,11,0.1)"}
+                      onMouseLeave={e=>e.currentTarget.style.background=SURFACE2}>
+                      👢 Kick
                     </button>
-                    <button onClick={()=>blockUser(u)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#F87171",fontSize:11,fontFamily:"Inter,sans-serif"}}>
-                      Block
+                    <button onClick={()=>blockUser(u)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#F87171",fontSize:11,fontFamily:"Inter,sans-serif",transition:"all .15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background="rgba(248,113,113,0.12)"}
+                      onMouseLeave={e=>e.currentTarget.style.background="rgba(248,113,113,0.06)"}>
+                      🚫 Block
                     </button>
-                  </div>
-                )}
-                {u.status==="blocked"&&<span style={{fontSize:11,color:"#F87171",background:"rgba(248,113,113,0.08)",padding:"4px 10px",borderRadius:8,border:"1px solid rgba(248,113,113,0.2)"}}>Blocked</span>}
+                  </>}
+                  {(u.status==="kicked"||u.status==="blocked")&&<>
+                    <span style={{fontSize:11,color:u.status==="blocked"?"#F87171":"#F59E0B",background:u.status==="blocked"?"rgba(248,113,113,0.08)":"rgba(245,158,11,0.08)",padding:"4px 8px",borderRadius:8,border:`1px solid ${u.status==="blocked"?"rgba(248,113,113,0.2)":"rgba(245,158,11,0.2)"}`}}>
+                      {u.status==="blocked"?"🚫 Blocked":"👢 Kicked"}
+                    </span>
+                    <button onClick={()=>unblockUser(u)} style={{background:"rgba(52,211,153,0.06)",border:"1px solid rgba(52,211,153,0.3)",borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#34D399",fontSize:11,fontFamily:"Inter,sans-serif"}}>
+                      ✅ Restore
+                    </button>
+                  </>}
+                  {u.status==="offline"&&<span style={{fontSize:11,color:"#555",padding:"4px 8px"}}>Offline</span>}
+                </div>
               </div>
             ))}
           </div>
@@ -1577,6 +1655,7 @@ export default function App(){
   const [me,setMe]=useState(null);
   const [wifiOk,setWifiOk]=useState(true);
   const [adminAuthed,setAdminAuthed]=useState(false);
+  const [removedReason,setRemovedReason]=useState(null); // "kicked" | "blocked"
   const {toasts,show:showToast}=useToast();
   const notifications=useNotifications(me);
 
@@ -1619,11 +1698,34 @@ export default function App(){
       {screen==="loading"&&<Loading label="CONNECTING…" sub={`Checking ${VENUE_WIFI}`}/>}
       {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo}/>}
       {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");showToast(`Welcome, ${user.name}! You're in 👑`);}} wifiOk={wifiOk}/>}
-      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={()=>{setMe(null);setScreen("landing");}} showToast={showToast} notifications={notifications}/>}
+      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={(reason)=>{setMe(null);if(reason==="kicked"||reason==="blocked"){setRemovedReason(reason);setScreen("removed");}else{setScreen("landing");}}} showToast={showToast} notifications={notifications}/>}
       {screen==="admin"&&(
         adminAuthed
           ?<AdminPanel onLogout={()=>{setAdminAuthed(false);setScreen("landing");}}/>
           :<AdminLogin onSuccess={()=>setAdminAuthed(true)} onBack={()=>setScreen("landing")}/>
+      )}
+      {screen==="removed"&&(
+        <div style={{height:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:BG,padding:20}}>
+          <div className="glass slide-up" style={{maxWidth:380,borderRadius:20,padding:40,textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:16}}>{removedReason==="blocked"?"🚫":"👋"}</div>
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:22,marginBottom:12,color:removedReason==="blocked"?"#F87171":GOLD}}>
+              {removedReason==="blocked"?"You have been blocked":"You have been removed"}
+            </h2>
+            <p style={{color:"#666",lineHeight:1.7,marginBottom:24,fontSize:14}}>
+              {removedReason==="blocked"
+                ?"You have been blocked by EasyCart staff and can no longer access this chat. If you think this was a mistake, please speak to a staff member."
+                :"You have been removed from the chat by EasyCart staff. You are welcome to rejoin if you follow the community guidelines."}
+            </p>
+            {removedReason==="kicked"&&(
+              <button className="btn-gold" onClick={()=>{setRemovedReason(null);setScreen("entry");}} style={{width:"100%",padding:12,fontSize:14,borderRadius:10,marginBottom:10}}>
+                Rejoin Chat
+              </button>
+            )}
+            <button className="btn-ghost" onClick={()=>{setRemovedReason(null);setScreen("landing");}} style={{width:"100%",padding:12,fontSize:14,borderRadius:10}}>
+              Back to Home
+            </button>
+          </div>
+        </div>
       )}
       {toasts.map(t=><div key={t.id} className="toast">✦ {t.msg}</div>)}
     </>
