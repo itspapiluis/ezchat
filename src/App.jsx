@@ -34,7 +34,10 @@ const GENDERS = [
 ];
 
 const PROFANITY = ["badword1","badword2"];
-const filterMsg = (t) => PROFANITY.reduce((s,w)=>s.replace(new RegExp(w,"gi"),"***"),t);
+const filterMsg = (t,extraWords=[]) => {
+  const all=[...PROFANITY,...extraWords];
+  return all.reduce((s,w)=>s.replace(new RegExp("\\b"+w+"\\b","gi"),"***"),t);
+};
 const EMOJIS = ["😄","😂","😍","🔥","👑","🎉","💛","✨","🥂","🎶","😎","🙌","💫","🤩","🍾","🎮","🎯","🎱"];
 const COLORS = ["#C9A84C","#E8C96A","#A78BFA","#34D399","#F87171","#60A5FA","#FB923C","#E879F9"];
 const fmtTime = (d) => new Date(d).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
@@ -152,7 +155,7 @@ function Loading({label="CONNECTING…",sub=""}){
 }
 
 // ── Landing page ──────────────────────────────────────────────────────────────
-function Landing({onJoin}){
+function Landing({onJoin,onAdminTap}){
   const [scroll,setScroll]=useState(0);
   const [annIdx,setAnnIdx]=useState(0);
   const [announcements,setAnnouncements]=useState([
@@ -209,7 +212,7 @@ function Landing({onJoin}){
       <section style={{minHeight:"88vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",padding:"40px 5%",position:"relative",overflow:"hidden"}}>
         <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse 80% 60% at 50% 55%,rgba(201,168,76,0.08) 0%,transparent 70%)",pointerEvents:"none"}}/>
         <div style={{marginBottom:28}}>
-          <img src={LOGO_SRC} alt="EasyCart" style={{width:110,height:110,objectFit:"contain",background:"#fff",borderRadius:20,padding:8,border:`1px solid ${GOLD_DIM}44`}}/>
+          <img src={LOGO_SRC} alt="EasyCart" onClick={onAdminTap} style={{width:110,height:110,objectFit:"contain",background:"#fff",borderRadius:20,padding:8,border:`1px solid ${GOLD_DIM}44`,cursor:"default"}}/>
         </div>
         <div style={{background:"rgba(201,168,76,0.08)",border:`1px solid ${GOLD_DIM}44`,borderRadius:20,padding:"5px 16px",fontSize:12,color:GOLD,marginBottom:20,letterSpacing:1.5}}>
           ✦ {VENUE_LOCATION.toUpperCase()}
@@ -606,6 +609,7 @@ function ChatRoom({me,onLeave,showToast}){
   const [annIdx,setAnnIdx]=useState(0);
   const [announcements,setAnnouncements]=useState(["🥂 Welcome to EasyCart!"]);
   const [loadingMsgs,setLoadingMsgs]=useState(true);
+  const [blockedWordsList,setBlockedWordsList]=useState([]);
   const endRef=useRef(null);
   const fileRef=useRef(null);
   const inputRef=useRef(null);
@@ -613,6 +617,19 @@ function ChatRoom({me,onLeave,showToast}){
 
   useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[messages]);
   useEffect(()=>{const t=setInterval(()=>setAnnIdx(i=>(i+1)%announcements.length),5000);return()=>clearInterval(t);},[announcements.length]);
+
+  // ── Load blocked words from Supabase ──
+  useEffect(()=>{
+    const loadWords=async()=>{
+      const {data}=await supabase.from("blocked_words").select("word");
+      if(data)setBlockedWordsList(data.map(w=>w.word));
+    };
+    loadWords();
+    const ch=supabase.channel("blocked-words-watch")
+      .on("postgres_changes",{event:"*",schema:"public",table:"blocked_words"},loadWords)
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[]);
 
   // ── Load announcements ──
   useEffect(()=>{
@@ -712,7 +729,7 @@ function ChatRoom({me,onLeave,showToast}){
   // ── Send message ──
   const sendMsg=async()=>{
     if(!input.trim())return;
-    const text=filterMsg(input.trim());
+    const text=filterMsg(input.trim(),blockedWordsList);
     setInput("");
     broadcastTyping(false);
     await supabase.from("messages").insert({room_id:ROOM_ID,user_id:me.id,text,type:"text",reactions:{}});
@@ -1009,15 +1026,404 @@ function ChatRoom({me,onLeave,showToast}){
   );
 }
 
+// ── Admin Panel ──────────────────────────────────────────────────────────────
+const ADMIN_PIN = "STAFF2025"; // Change this to your staff PIN
+
+function AdminLogin({onSuccess,onBack}){
+  const [pin,setPin]=useState("");
+  const [error,setError]=useState("");
+  const [shake,setShake]=useState(false);
+
+  const tryPin=(p)=>{
+    if(p===ADMIN_PIN){onSuccess();}
+    else{
+      setError("Incorrect PIN");
+      setShake(true);
+      setPin("");
+      setTimeout(()=>{setShake(false);setError("");},1500);
+    }
+  };
+  const press=(v)=>{
+    if(pin.length>=6)return;
+    const next=pin+v;
+    setPin(next);
+    if(next.length===6)setTimeout(()=>tryPin(next),120);
+  };
+  const del=()=>setPin(p=>p.slice(0,-1));
+
+  return(
+    <div style={{height:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:BG,padding:20,position:"relative",overflow:"hidden"}}>
+      <div style={{position:"absolute",inset:0,background:"radial-gradient(ellipse 60% 50% at 50% 45%,rgba(201,168,76,0.06) 0%,transparent 65%)",pointerEvents:"none"}}/>
+      <div className="glass slide-up" style={{width:"100%",maxWidth:340,borderRadius:22,padding:"36px 24px",textAlign:"center",position:"relative",zIndex:1}}>
+        <button onClick={onBack} style={{position:"absolute",top:16,left:16,background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:18,lineHeight:1,fontFamily:"Inter,sans-serif"}}>←</button>
+        <img src={LOGO_SRC} alt="EasyCart" style={{width:56,height:56,objectFit:"contain",background:"#fff",borderRadius:12,padding:4,marginBottom:12}}/>
+        <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:900,marginBottom:4}} className="gold-text">Staff Access</h2>
+        <p style={{fontSize:12,color:"#444",marginBottom:24}}>Enter your 6-digit staff PIN</p>
+        <div style={{display:"flex",justifyContent:"center",gap:10,marginBottom:24,animation:shake?"shake .4s ease":"none"}}>
+          {[0,1,2,3,4,5].map(i=>(
+            <div key={i} style={{width:12,height:12,borderRadius:"50%",background:i<pin.length?GOLD:"transparent",border:`2px solid ${i<pin.length?GOLD:BORDER}`,transition:"all .15s"}}/>
+          ))}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,maxWidth:220,margin:"0 auto"}}>
+          {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((k,i)=>(
+            <button key={i} onClick={()=>k==="⌫"?del():k!==""?press(String(k)):null}
+              style={{padding:"14px 0",borderRadius:12,background:k==="⌫"?"transparent":SURFACE2,border:`1px solid ${k==="⌫"?"transparent":BORDER}`,color:k==="⌫"?"#555":"#e8e0d0",fontSize:k==="⌫"?18:20,fontWeight:500,cursor:k===""?"default":"pointer",fontFamily:"Inter,sans-serif",transition:"all .15s",opacity:k===""?0:1}}
+              onMouseEnter={e=>{if(k!=="")e.currentTarget.style.borderColor=GOLD_DIM;}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=k==="⌫"?"transparent":BORDER;}}>
+              {k}
+            </button>
+          ))}
+        </div>
+        {error&&<div style={{marginTop:16,fontSize:13,color:"#F87171"}}>{error}</div>}
+        <p style={{marginTop:18,fontSize:10,color:"#2a2a2a"}}>Staff only — do not share with guests</p>
+      </div>
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px)}40%{transform:translateX(8px)}60%{transform:translateX(-5px)}80%{transform:translateX(5px)}}`}</style>
+    </div>
+  );
+}
+
+function AdminPanel({onLogout}){
+  const [tab,setTab]=useState("dashboard");
+  const [users,setUsers]=useState([]);
+  const [messages,setMessages]=useState([]);
+  const [announcements,setAnnouncements]=useState([]);
+  const [blockedWords,setBlockedWords]=useState([]);
+  const [newAnn,setNewAnn]=useState("");
+  const [newWord,setNewWord]=useState("");
+  const [confirmLogout,setConfirmLogout]=useState(false);
+  const [confirmClear,setConfirmClear]=useState(false);
+  const {toasts,show:showToast}=useToast();
+
+  const PRESETS=[
+    "🥂 Happy Hour until 10PM — 2-for-1 cocktails",
+    "🎮 Barcade Challenge starting NOW — winner gets a free round!",
+    "🎶 Live band takes the stage in 15 minutes!",
+    "🏆 VIP booth available — see the host",
+    "🍹 Tonight's special: ask your server",
+    "⏰ Last call for food orders — kitchen closes at midnight",
+    "🎉 Welcome everyone to EasyCart — have an amazing night!",
+    "🔥 The bar is fully stocked — what are you having?",
+  ];
+
+  const FIL_SLANG=["putangina","gago","tangina","bobo","tanga","ulol","bwisit","puta","leche","hudas","buwisit","inutil","engot","lintik","hayop","pakyu","tarantado","gunggong","mangmang","buang","yawa","bogo","piste","ungo"];
+
+  useEffect(()=>{loadAll();},[]);
+
+  const loadAll=async()=>{
+    const {data:u}=await supabase.from("users").select("*").eq("room_id",ROOM_ID).order("created_at",{ascending:false});
+    if(u)setUsers(u);
+    const {data:m}=await supabase.from("messages").select("*, users(name,color)").eq("room_id",ROOM_ID).order("created_at",{ascending:false}).limit(50);
+    if(m)setMessages(m);
+    const {data:a}=await supabase.from("announcements").select("*").eq("room_id",ROOM_ID).order("pinned",{ascending:false}).order("created_at",{ascending:false});
+    if(a)setAnnouncements(a);
+    const {data:w}=await supabase.from("blocked_words").select("*").order("created_at",{ascending:true});
+    if(w)setBlockedWords(w);
+  };
+
+  // Announcements
+  const postAnn=async(text)=>{
+    if(!text.trim())return;
+    await supabase.from("announcements").insert({room_id:ROOM_ID,text:text.trim(),pinned:false});
+    setNewAnn("");
+    showToast("Announcement posted ✦");
+    loadAll();
+  };
+  const deleteAnn=async(id)=>{
+    await supabase.from("announcements").delete().eq("id",id);
+    showToast("Announcement removed");
+    loadAll();
+  };
+  const togglePin=async(id,pinned)=>{
+    await supabase.from("announcements").update({pinned:!pinned}).eq("id",id);
+    loadAll();
+  };
+
+  // Users
+  const kickUser=async(u)=>{
+    await supabase.from("users").update({status:"offline"}).eq("id",u.id);
+    await supabase.from("messages").insert({room_id:ROOM_ID,user_id:u.id,text:`${u.name} was removed from the chat by staff.`,type:"system"});
+    showToast(`${u.name} kicked`);
+    loadAll();
+  };
+  const blockUser=async(u)=>{
+    await supabase.from("users").update({status:"blocked"}).eq("id",u.id);
+    await supabase.from("messages").insert({room_id:ROOM_ID,user_id:u.id,text:`${u.name} was blocked by staff.`,type:"system"});
+    showToast(`${u.name} blocked`);
+    loadAll();
+  };
+
+  // Messages
+  const deleteMsg=async(id)=>{
+    await supabase.from("messages").delete().eq("id",id);
+    showToast("Message deleted");
+    loadAll();
+  };
+  const clearAllMsgs=async()=>{
+    await supabase.from("messages").delete().eq("room_id",ROOM_ID);
+    setConfirmClear(false);
+    showToast("All messages cleared");
+    loadAll();
+  };
+
+  // Word filter
+  const addWord=async(word)=>{
+    if(!word.trim())return;
+    await supabase.from("blocked_words").insert({word:word.trim().toLowerCase()});
+    setNewWord("");
+    showToast(`"${word}" added to filter`);
+    loadAll();
+  };
+  const removeWord=async(id)=>{
+    await supabase.from("blocked_words").delete().eq("id",id);
+    loadAll();
+  };
+  const addFilipino=async()=>{
+    for(const w of FIL_SLANG){
+      await supabase.from("blocked_words").upsert({word:w},{onConflict:"word"});
+    }
+    showToast("Filipino slang filter added ✦");
+    loadAll();
+  };
+
+  const onlineUsers=users.filter(u=>u.status==="online");
+  const maleCount=onlineUsers.filter(u=>u.gender==="male").length;
+  const femaleCount=onlineUsers.filter(u=>u.gender==="female").length;
+  const lgbtqCount=onlineUsers.filter(u=>["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)).length;
+  const preferCount=onlineUsers.filter(u=>u.gender==="prefer_not").length;
+
+  return(
+    <div style={{height:"100dvh",display:"flex",flexDirection:"column",background:BG,overflow:"hidden"}}>
+      {/* Top bar */}
+      <div style={{padding:"0 16px",height:54,display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
+        <Logo size={28} showText={true}/>
+        <div style={{flex:1}}/>
+        <div style={{background:`rgba(201,168,76,0.08)`,border:`1px solid ${GOLD_DIM}44`,borderRadius:8,padding:"4px 12px",fontSize:11,color:GOLD,letterSpacing:.5}}>⚙️ STAFF PANEL</div>
+        <button className="btn-ghost" onClick={()=>setConfirmLogout(true)} style={{padding:"5px 12px",fontSize:12}}>Logout</button>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"]].map(([v,l])=>(
+          <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
+        ))}
+      </div>
+
+      <div style={{flex:1,overflowY:"auto",padding:16}}>
+
+        {/* ── DASHBOARD ── */}
+        {tab==="dashboard"&&(
+          <div style={{maxWidth:700,margin:"0 auto"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,marginBottom:20}}>
+              {[
+                {icon:"👥",label:"Online Now",value:onlineUsers.length,color:GOLD},
+                {icon:"👨",label:"Male",value:maleCount,color:"#60A5FA"},
+                {icon:"👩",label:"Female",value:femaleCount,color:"#F87171"},
+                {icon:"🏳️‍🌈",label:"LGBTQ+",value:lgbtqCount,color:"#A78BFA"},
+                {icon:"🤐",label:"Prefer Not",value:preferCount,color:"#888"},
+                {icon:"💬",label:"Messages",value:messages.length,color:"#34D399"},
+              ].map(s=>(
+                <div key={s.label} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:14,padding:"16px 14px",textAlign:"center"}}>
+                  <div style={{fontSize:22,marginBottom:6}}>{s.icon}</div>
+                  <div style={{fontSize:26,fontWeight:700,color:s.color,fontFamily:"'Playfair Display',serif"}}>{s.value}</div>
+                  <div style={{fontSize:11,color:"#444",marginTop:2}}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="glass" style={{borderRadius:14,padding:16,marginBottom:16}}>
+              <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:12}}>QUICK ACTIONS</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button className="btn-gold" onClick={()=>setTab("announcements")} style={{padding:"9px 16px",fontSize:13,borderRadius:8}}>📢 Post Announcement</button>
+                <button className="btn-ghost" onClick={()=>setTab("users")} style={{padding:"9px 16px",fontSize:13,borderRadius:8}}>👥 Manage Guests</button>
+                <button onClick={()=>setConfirmClear(true)} style={{padding:"9px 16px",fontSize:13,background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:8,color:"#F87171",cursor:"pointer",fontFamily:"Inter,sans-serif"}}>🗑️ Clear All Messages</button>
+              </div>
+            </div>
+
+            <div className="glass" style={{borderRadius:14,padding:16}}>
+              <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:12}}>RECENT GUESTS</div>
+              {users.slice(0,8).map(u=>(
+                <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 0",borderBottom:`1px solid ${BORDER}`}}>
+                  <Avatar user={u} size={30}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,color:"#ccc",fontWeight:500}}>{u.name}</div>
+                    <div style={{fontSize:11,color:"#444"}}>{u.first_name} {u.last_name} · {u.gender||"—"}</div>
+                  </div>
+                  <div style={{fontSize:10,color:u.status==="online"?"#34D399":u.status==="blocked"?"#F87171":"#555",textTransform:"uppercase",letterSpacing:.5}}>{u.status}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── ANNOUNCEMENTS ── */}
+        {tab==="announcements"&&(
+          <div style={{maxWidth:700,margin:"0 auto"}}>
+            <div className="glass" style={{borderRadius:14,padding:16,marginBottom:16}}>
+              <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:12}}>POST NEW ANNOUNCEMENT</div>
+              <textarea value={newAnn} onChange={e=>setNewAnn(e.target.value)} placeholder="Type your announcement…" rows={3} style={{width:"100%",padding:"10px 12px",fontSize:14,resize:"none",borderRadius:8,marginBottom:10,lineHeight:1.5}}/>
+              <button className="btn-gold" onClick={()=>postAnn(newAnn)} style={{padding:"9px 20px",fontSize:13,borderRadius:8}}>Post ✦</button>
+            </div>
+
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>QUICK PRESETS</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:8}}>
+                {PRESETS.map((p,i)=>(
+                  <button key={i} onClick={()=>postAnn(p)} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"10px 12px",textAlign:"left",cursor:"pointer",fontFamily:"Inter,sans-serif",color:"#ccc",fontSize:12,lineHeight:1.5,transition:"all .15s"}}
+                    onMouseEnter={e=>{e.currentTarget.style.borderColor=GOLD_DIM;}}
+                    onMouseLeave={e=>{e.currentTarget.style.borderColor=BORDER;}}>
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>ACTIVE ANNOUNCEMENTS ({announcements.length})</div>
+              {announcements.length===0&&<div style={{textAlign:"center",padding:32,color:"#333",fontSize:13,background:SURFACE,borderRadius:12}}>No announcements yet</div>}
+              {announcements.map(a=>(
+                <div key={a.id} className="fade-in" style={{background:SURFACE,border:`1px solid ${a.pinned?GOLD_DIM:BORDER}`,borderRadius:10,padding:"12px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+                  {a.pinned&&<span style={{fontSize:14}}>📌</span>}
+                  <div style={{flex:1,fontSize:13,color:"#ccc",lineHeight:1.5}}>{a.text}</div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button onClick={()=>togglePin(a.id,a.pinned)} style={{background:a.pinned?`rgba(201,168,76,0.12)`:SURFACE2,border:`1px solid ${a.pinned?GOLD_DIM:BORDER}`,borderRadius:6,width:28,height:28,cursor:"pointer",color:a.pinned?GOLD:"#555",fontSize:12,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>📌</button>
+                    <button onClick={()=>deleteAnn(a.id)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:6,width:28,height:28,cursor:"pointer",color:"#F87171",fontSize:14,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>×</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── GUESTS ── */}
+        {tab==="users"&&(
+          <div style={{maxWidth:700,margin:"0 auto"}}>
+            <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:12}}>ALL GUESTS TONIGHT ({users.length})</div>
+            {users.map(u=>(
+              <div key={u.id} className="fade-in" style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:10,padding:"12px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+                <Avatar user={u} size={36}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#e8e0d0",display:"flex",alignItems:"center",gap:6}}>
+                    {u.name}
+                    <span style={{fontSize:11}}>{u.gender==="male"?"👨":u.gender==="female"?"👩":["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)?"🏳️‍🌈":u.gender==="prefer_not"?"🤐":""}</span>
+                  </div>
+                  <div style={{fontSize:11,color:"#555",marginTop:2}}>{u.first_name} {u.last_name} · {u.gender||"not set"}</div>
+                  <div style={{fontSize:10,color:u.status==="online"?"#34D399":u.status==="blocked"?"#F87171":"#555",marginTop:2,textTransform:"uppercase",letterSpacing:.5}}>{u.status}</div>
+                </div>
+                {u.status!=="blocked"&&(
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    <button onClick={()=>kickUser(u)} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#F59E0B",fontSize:11,fontFamily:"Inter,sans-serif",transition:"all .15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.borderColor="#F59E0B"}
+                      onMouseLeave={e=>e.currentTarget.style.borderColor=BORDER}>
+                      Kick
+                    </button>
+                    <button onClick={()=>blockUser(u)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:7,padding:"6px 10px",cursor:"pointer",color:"#F87171",fontSize:11,fontFamily:"Inter,sans-serif"}}>
+                      Block
+                    </button>
+                  </div>
+                )}
+                {u.status==="blocked"&&<span style={{fontSize:11,color:"#F87171",background:"rgba(248,113,113,0.08)",padding:"4px 10px",borderRadius:8,border:"1px solid rgba(248,113,113,0.2)"}}>Blocked</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── MESSAGES ── */}
+        {tab==="messages"&&(
+          <div style={{maxWidth:700,margin:"0 auto"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+              <div style={{fontSize:11,color:"#444",letterSpacing:1}}>RECENT MESSAGES ({messages.length})</div>
+              <button onClick={()=>setConfirmClear(true)} style={{background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:8,padding:"6px 14px",cursor:"pointer",color:"#F87171",fontSize:12,fontFamily:"Inter,sans-serif"}}>🗑️ Clear All</button>
+            </div>
+            {messages.filter(m=>m.type!=="system").map(m=>(
+              <div key={m.id} className="fade-in" style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:10,padding:"10px 14px",marginBottom:6,display:"flex",alignItems:"flex-start",gap:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:11,color:m.users?.color||GOLD,marginBottom:4,fontWeight:600}}>{m.users?.name||"Guest"}</div>
+                  {m.type==="image"?<div style={{fontSize:12,color:"#555"}}>📷 Shared an image</div>:<div style={{fontSize:13,color:"#ccc",lineHeight:1.5,wordBreak:"break-word"}}>{m.text}</div>}
+                  <div style={{fontSize:10,color:"#333",marginTop:4}}>{fmtTime(m.created_at)}</div>
+                </div>
+                <button onClick={()=>deleteMsg(m.id)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:6,width:26,height:26,cursor:"pointer",color:"#F87171",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontFamily:"Inter,sans-serif"}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ── WORD FILTER ── */}
+        {tab==="filter"&&(
+          <div style={{maxWidth:700,margin:"0 auto"}}>
+            <div className="glass" style={{borderRadius:14,padding:16,marginBottom:16}}>
+              <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:12}}>ADD WORD TO FILTER</div>
+              <div style={{display:"flex",gap:8}}>
+                <input value={newWord} onChange={e=>setNewWord(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addWord(newWord)} placeholder="Type a word to block…" style={{flex:1,padding:"10px 12px",fontSize:14,borderRadius:8}}/>
+                <button className="btn-gold" onClick={()=>addWord(newWord)} style={{padding:"10px 16px",fontSize:13,borderRadius:8}}>Add</button>
+              </div>
+              <div style={{marginTop:12}}>
+                <button onClick={addFilipino} style={{background:`rgba(201,168,76,0.08)`,border:`1px solid ${GOLD_DIM}44`,borderRadius:8,padding:"8px 16px",cursor:"pointer",color:GOLD,fontSize:12,fontFamily:"Inter,sans-serif",width:"100%"}}>
+                  🇵🇭 Add Filipino/Bisaya Slang Filter (23 words)
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>BLOCKED WORDS ({blockedWords.length})</div>
+              {blockedWords.length===0&&<div style={{textAlign:"center",padding:32,color:"#333",fontSize:13,background:SURFACE,borderRadius:12}}>No blocked words yet. Add some above.</div>}
+              <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+                {blockedWords.map(w=>(
+                  <div key={w.id} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"5px 10px",display:"flex",alignItems:"center",gap:8,fontSize:13,color:"#ccc"}}>
+                    <span>{w.word}</span>
+                    <button onClick={()=>removeWord(w.id)} style={{background:"none",border:"none",color:"#F87171",cursor:"pointer",fontSize:14,lineHeight:1,fontFamily:"Inter,sans-serif",padding:0}}>×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      {/* Confirm clear modal */}
+      {confirmClear&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div className="glass slide-up" style={{maxWidth:300,borderRadius:18,padding:28,textAlign:"center"}}>
+            <div style={{fontSize:32,marginBottom:12}}>🗑️</div>
+            <h3 style={{fontSize:17,marginBottom:8}}>Clear all messages?</h3>
+            <p style={{fontSize:13,color:"#555",marginBottom:20,lineHeight:1.6}}>This cannot be undone.</p>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn-ghost" onClick={()=>setConfirmClear(false)} style={{flex:1,padding:10,fontSize:13,borderRadius:8}}>Cancel</button>
+              <button onClick={clearAllMsgs} style={{flex:1,padding:10,fontSize:13,background:"rgba(248,113,113,0.12)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:8,color:"#F87171",cursor:"pointer",fontFamily:"Inter,sans-serif"}}>Clear All</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm logout modal */}
+      {confirmLogout&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div className="glass slide-up" style={{maxWidth:300,borderRadius:18,padding:28,textAlign:"center"}}>
+            <div style={{fontSize:32,marginBottom:12}}>🔒</div>
+            <h3 style={{fontSize:17,marginBottom:8}}>Log out of Staff Panel?</h3>
+            <p style={{fontSize:13,color:"#555",marginBottom:20,lineHeight:1.6}}>You'll need your PIN to get back in.</p>
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn-ghost" onClick={()=>setConfirmLogout(false)} style={{flex:1,padding:10,fontSize:13,borderRadius:8}}>Cancel</button>
+              <button className="btn-gold" onClick={onLogout} style={{flex:1,padding:10,fontSize:13,borderRadius:8}}>Log out</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toasts.map(t=><div key={t.id} className="toast">✦ {t.msg}</div>)}
+    </div>
+  );
+}
+
 // ── App Root ──────────────────────────────────────────────────────────────────
 export default function App(){
   const [screen,setScreen]=useState("loading");
   const [me,setMe]=useState(null);
   const [wifiOk,setWifiOk]=useState(true);
+  const [adminAuthed,setAdminAuthed]=useState(false);
   const {toasts,show:showToast}=useToast();
 
   useEffect(()=>{
-    // Simulate Wi-Fi/connection check then go to landing
     setTimeout(()=>{
       setWifiOk(true);
       setScreen("landing");
@@ -1032,13 +1438,27 @@ export default function App(){
     return()=>window.removeEventListener("beforeunload",cleanup);
   },[me]);
 
+  // Secret admin access: tap logo 5 times on landing
+  const [logoTaps,setLogoTaps]=useState(0);
+  const tapLogo=()=>{
+    setLogoTaps(t=>{
+      if(t+1>=5){setScreen("admin");return 0;}
+      return t+1;
+    });
+  };
+
   return(
     <>
       <style>{CSS}</style>
       {screen==="loading"&&<Loading label="CONNECTING…" sub={`Checking ${VENUE_WIFI}`}/>}
-      {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")}/>}
+      {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo}/>}
       {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");showToast(`Welcome, ${user.name}! You're in 👑`);}} wifiOk={wifiOk}/>}
       {screen==="chat"&&me&&<ChatRoom me={me} onLeave={()=>{setMe(null);setScreen("landing");}} showToast={showToast}/>}
+      {screen==="admin"&&(
+        adminAuthed
+          ?<AdminPanel onLogout={()=>{setAdminAuthed(false);setScreen("landing");}}/>
+          :<AdminLogin onSuccess={()=>setAdminAuthed(true)} onBack={()=>setScreen("landing")}/>
+      )}
       {toasts.map(t=><div key={t.id} className="toast">✦ {t.msg}</div>)}
     </>
   );
