@@ -1305,6 +1305,26 @@ function AdminPanel({onLogout}){
   const FIL_SLANG=["putangina","gago","tangina","bobo","tanga","ulol","bwisit","puta","leche","hudas","buwisit","inutil","engot","lintik","hayop","pakyu","tarantado","gunggong","mangmang","buang","yawa","bogo","piste","ungo"];
 
   useEffect(()=>{loadAll();loadAccessCode();},[]);
+  useEffect(() => {
+    const channel = supabase
+        .channel("admin-live")
+        .on(
+            "postgres_changes",
+            {
+                event: "*",
+                schema: "public",
+                table: "messages",
+            },
+            () => {
+                loadAll();
+            }
+        )
+        .subscribe();
+
+    return () => {
+        supabase.removeChannel(channel);
+    };
+}, []);
 
   const loadAccessCode=async()=>{
     const {data}=await supabase.from("settings").select("value").eq("key","access_code").single();
