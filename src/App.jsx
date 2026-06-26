@@ -1096,8 +1096,11 @@ function ChatRoom({me,onLeave,showToast,notifications}){
       {/* Mobile bottom nav */}
       <div className="mobile-only" style={{borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,flexDirection:"row",zIndex:10}}>
         {[["chat","💬","Chat"],["guests","👥","Guests"],["venue","✦","Venue"]].map(([v,icon,label])=>(
-          <button key={v} onClick={()=>setMobileTab(v)} style={{flex:1,padding:"10px 4px 8px",background:"none",border:"none",borderTop:`2px solid ${mobileTab===v?GOLD:"transparent"}`,color:mobileTab===v?GOLD:"#444",fontFamily:"Inter,sans-serif",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s"}}>
-            <span style={{fontSize:18}}>{icon}</span>
+          <button key={v} onClick={()=>setMobileTab(v)} style={{flex:1,padding:"10px 4px 8px",background:"none",border:"none",borderTop:`2px solid ${mobileTab===v?GOLD:"transparent"}`,color:mobileTab===v?GOLD:"#444",fontFamily:"Inter,sans-serif",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s",position:"relative"}}>
+            <div style={{position:"relative"}}>
+              <span style={{fontSize:18}}>{icon}</span>
+              {v==="guests"&&totalUnread>0&&<div style={{position:"absolute",top:-4,right:-6,background:"#F87171",color:"#fff",borderRadius:10,padding:"0px 4px",fontSize:9,fontWeight:700,minWidth:14,textAlign:"center",lineHeight:"14px"}}>{totalUnread}</div>}
+            </div>
             <span style={{letterSpacing:.5}}>{label}</span>
           </button>
         ))}
@@ -1112,8 +1115,11 @@ function ChatRoom({me,onLeave,showToast,notifications}){
           </div>
           <div style={{flex:1,overflowY:"auto",padding:12}}>
             {visibleUsers.map(u=>(
-              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}} onClick={()=>{if(u.id!==me.id){setPmTarget(u);setMobileTab("chat");}}}>
-                <Avatar user={u} size={38}/>
+              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}} onClick={()=>{if(u.id!==me.id){setPmTarget(u);markDMRead(u.id);setMobileTab("chat");}}}>
+                <div style={{position:"relative",flexShrink:0}}>
+                  <Avatar user={u} size={38}/>
+                  {unreadDMs[u.id]&&<div className="notif-dot"/>}
+                </div>
                 <div style={{flex:1}}>
                   <div style={{fontSize:14,fontWeight:500,color:u.id===me.id?GOLD:"#ccc"}}>{u.id===me.id?"You ("+u.name+")":u.name}</div>
                   <div style={{fontSize:11,color:u.status==="away"?"#F59E0B":"#34D399",marginTop:2}}>{u.status||"online"}</div>
@@ -1572,6 +1578,7 @@ export default function App(){
   const [wifiOk,setWifiOk]=useState(true);
   const [adminAuthed,setAdminAuthed]=useState(false);
   const {toasts,show:showToast}=useToast();
+  const notifications=useNotifications(me);
 
   useEffect(()=>{
     setTimeout(()=>{
@@ -1612,7 +1619,7 @@ export default function App(){
       {screen==="loading"&&<Loading label="CONNECTING…" sub={`Checking ${VENUE_WIFI}`}/>}
       {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo}/>}
       {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");showToast(`Welcome, ${user.name}! You're in 👑`);}} wifiOk={wifiOk}/>}
-      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={()=>{setMe(null);setScreen("landing");}} showToast={showToast}/>}
+      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={()=>{setMe(null);setScreen("landing");}} showToast={showToast} notifications={notifications}/>}
       {screen==="admin"&&(
         adminAuthed
           ?<AdminPanel onLogout={()=>{setAdminAuthed(false);setScreen("landing");}}/>
