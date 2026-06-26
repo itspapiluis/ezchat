@@ -96,6 +96,10 @@ input::placeholder,textarea::placeholder{color:#3a3a3a}
   .desktop-only{display:none!important}
   .mobile-chat-area{min-width:0!important;width:100%!important}
 }
+.notif-dot{position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;background:#F87171;border:2px solid #0F0F0F;animation:pulse 1.5s infinite}
+.unread-badge{background:#F87171;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;min-width:18px;text-align:center}
+@keyframes notifSlide{from{opacity:0;transform:translateX(100%)}to{opacity:1;transform:translateX(0)}}
+.notif-popup{position:fixed;top:70px;right:16px;background:#1a1208;border:1px solid ${GOLD_DIM};border-left:3px solid #C9A84C;border-radius:12px;padding:12px 16px;z-index:9998;animation:notifSlide .3s ease;box-shadow:0 8px 32px rgba(0,0,0,0.7);max-width:280px;cursor:pointer}
 `;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -125,6 +129,92 @@ function useToast(){
   const [toasts,setToasts]=useState([]);
   const show=(msg)=>{const id=randomId();setToasts(p=>[...p,{id,msg}]);setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),3200);};
   return{toasts,show};
+}
+
+// ── Notification system ──────────────────────────────────────────────────────
+function useNotifications(me){
+  const [permission,setPermission]=useState("default");
+  const [soundOn,setSoundOn]=useState(true);
+  const [unreadDMs,setUnreadDMs]=useState({}); // {userId: count}
+  const [notifPopups,setNotifPopups]=useState([]);
+  const audioCtxRef=useRef(null);
+
+  // Request permission on mount
+  useEffect(()=>{
+    if("Notification" in window){
+      setPermission(Notification.permission);
+      if(Notification.permission==="default"){
+        Notification.requestPermission().then(p=>setPermission(p));
+      }
+    }
+  },[]);
+
+  // Play bar-vibe sound (Web Audio API — no file needed)
+  const playSound=useCallback(()=>{
+    if(!soundOn)return;
+    try{
+      const ctx=new(window.AudioContext||window.webkitAudioContext)();
+      // Bar chime: two quick tones
+      const times=[[0,880,0.15],[0.12,1100,0.1]];
+      times.forEach(([when,freq,dur])=>{
+        const osc=ctx.createOscillator();
+        const gain=ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.frequency.value=freq;
+        osc.type="sine";
+        gain.gain.setValueAtTime(0,ctx.currentTime+when);
+        gain.gain.linearRampToValueAtTime(0.25,ctx.currentTime+when+0.01);
+        gain.gain.linearRampToValueAtTime(0,ctx.currentTime+when+dur);
+        osc.start(ctx.currentTime+when);
+        osc.stop(ctx.currentTime+when+dur+0.05);
+      });
+    }catch(e){}
+  },[soundOn]);
+
+  // Show browser push notification
+  const pushNotif=useCallback((title,body,onClick)=>{
+    if(permission==="granted"&&document.hidden){
+      const n=new Notification(title,{
+        body,
+        icon:"/favicon.svg",
+        badge:"/favicon.svg",
+        tag:"ezchat-dm",
+        renotify:true,
+      });
+      if(onClick)n.onclick=()=>{window.focus();onClick();n.close();};
+      setTimeout(()=>n.close(),6000);
+    }
+  },[permission]);
+
+  // Show in-app popup notification
+  const showPopup=useCallback((msg,onClick)=>{
+    const id=randomId();
+    setNotifPopups(p=>[...p,{id,msg,onClick}]);
+    setTimeout(()=>setNotifPopups(p=>p.filter(n=>n.id!==id)),4000);
+  },[]);
+
+  // Mark DM as read
+  const markDMRead=useCallback((userId)=>{
+    setUnreadDMs(p=>{const n={...p};delete n[userId];return n;});
+  },[]);
+
+  // Add unread DM
+  const addUnreadDM=useCallback((userId)=>{
+    setUnreadDMs(p=>({...p,[userId]:(p[userId]||0)+1}));
+  },[]);
+
+  // Update tab title with unread count
+  const totalUnread=Object.values(unreadDMs).reduce((a,b)=>a+b,0);
+  useEffect(()=>{
+    if(totalUnread>0){
+      document.title=`(${totalUnread}) EZChat · EasyCart`;
+    } else {
+      document.title="EZChat · EasyCart Barcade & Lounge";
+    }
+  },[totalUnread]);
+
+  return{permission,soundOn,setSoundOn,unreadDMs,totalUnread,playSound,pushNotif,showPopup,notifPopups,setNotifPopups,markDMRead,addUnreadDM};
 }
 
 // ── Skeleton loaders ──────────────────────────────────────────────────────────
@@ -198,7 +288,9 @@ function Landing({onJoin,onAdminTap}){
   return(
     <div style={{height:"100dvh",overflowY:"auto",background:BG}} onScroll={e=>setScroll(e.currentTarget.scrollTop)}>
       <nav style={{position:"sticky",top:0,zIndex:100,padding:"0 5%",height:62,display:"flex",alignItems:"center",justifyContent:"space-between",background:scroll>40?"rgba(8,8,8,0.97)":"transparent",backdropFilter:scroll>40?"blur(16px)":"none",borderBottom:scroll>40?`1px solid ${BORDER}`:"none",transition:"all .3s"}}>
-        <Logo size={32} showText={true}/>
+        <div onClick={onAdminTap} style={{cursor:"default"}}>
+          <Logo size={32} showText={true}/>
+        </div>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <button className="btn-ghost" style={{padding:"7px 16px",fontSize:13}} onClick={()=>document.getElementById("how")?.scrollIntoView({behavior:"smooth"})}>How It Works</button>
           <button className="btn-gold" onClick={onJoin} style={{padding:"8px 20px",fontSize:13}}>Join Chat</button>
@@ -281,7 +373,7 @@ function Landing({onJoin,onAdminTap}){
       <footer style={{borderTop:`1px solid ${BORDER}`,padding:"20px 5%",display:"flex",justifyContent:"space-between",alignItems:"center",color:"#2a2a2a",fontSize:12,flexWrap:"wrap",gap:10}}>
         <Logo size={24} showText={true}/>
         <span>{VENUE_NAME} · {VENUE_LOCATION}</span>
-        <span>Venue Wi-Fi secured · No accounts</span>
+        <span onClick={onAdminTap} style={{cursor:"default",userSelect:"none"}}>Venue Wi-Fi secured · No accounts</span>
       </footer>
     </div>
   );
@@ -527,12 +619,14 @@ function ImageModal({src,onClose}){
 }
 
 // ── Private Message Panel ─────────────────────────────────────────────────────
-function PMPanel({target,me,onClose}){
+function PMPanel({target,me,onClose,notifications}){
   const [msgs,setMsgs]=useState([]);
   const [input,setInput]=useState("");
   const [loading,setLoading]=useState(true);
   const endRef=useRef(null);
+  const {playSound,pushNotif,markDMRead}=notifications||{};
 
+  useEffect(()=>{if(markDMRead)markDMRead(target.id);},[target.id]);
   useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
 
   useEffect(()=>{
@@ -551,6 +645,11 @@ function PMPanel({target,me,onClose}){
         const m=payload.new;
         if((m.from_id===me.id&&m.to_id===target.id)||(m.from_id===target.id&&m.to_id===me.id)){
           setMsgs(p=>[...p,m]);
+          // Notify only for incoming messages
+          if(m.from_id===target.id){
+            if(playSound)playSound();
+            if(pushNotif)pushNotif("EZChat — Private Message","You have a new message");
+          }
         }
       }).subscribe();
     return()=>supabase.removeChannel(ch);
@@ -594,7 +693,8 @@ function PMPanel({target,me,onClose}){
 }
 
 // ── Main Chat Room ────────────────────────────────────────────────────────────
-function ChatRoom({me,onLeave,showToast}){
+function ChatRoom({me,onLeave,showToast,notifications}){
+  const {soundOn,setSoundOn,unreadDMs,totalUnread,playSound,pushNotif,showPopup,notifPopups,setNotifPopups,markDMRead,addUnreadDM}=notifications;
   const [messages,setMessages]=useState([]);
   const [users,setUsers]=useState([]);
   const [input,setInput]=useState("");
@@ -664,6 +764,13 @@ function ChatRoom({me,onLeave,showToast}){
         const m=payload.new;
         const {data:userData}=await supabase.from("users").select("id,name,color,status").eq("id",m.user_id).single();
         setMessages(p=>[...p,{...m,users:userData}]);
+        // Notify for messages from others (not system)
+        if(m.user_id!==me.id&&m.type!=="system"){
+          playSound();
+          if(document.hidden){
+            pushNotif("EZChat — New Message",`${userData?.name||"Someone"} sent a message in the lounge`);
+          }
+        }
       })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"messages",filter:`room_id=eq.${ROOM_ID}`},payload=>{
         setMessages(p=>p.map(m=>m.id===payload.new.id?{...m,...payload.new}:m));
@@ -684,6 +791,27 @@ function ChatRoom({me,onLeave,showToast}){
       .subscribe();
     return()=>supabase.removeChannel(ch);
   },[]);
+
+  // ── Listen for incoming DMs (for red dot + notification when PM panel is closed) ──
+  useEffect(()=>{
+    const ch=supabase.channel(`dm-inbox-${me.id}`)
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"direct_messages",filter:`to_id=eq.${me.id}`},payload=>{
+        const m=payload.new;
+        // Only notify if PM panel is not open with this sender
+        if(!pmTarget||pmTarget.id!==m.from_id){
+          addUnreadDM(m.from_id);
+          playSound();
+          const sender=users.find(u=>u.id===m.from_id);
+          showPopup(`💬 ${sender?.name||"Someone"}: You have a new message`,()=>{
+            const u=users.find(x=>x.id===m.from_id);
+            if(u)setPmTarget(u);
+          });
+          pushNotif("EZChat — Private Message","You have a new message");
+        }
+      })
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[me.id,pmTarget,users]);
 
   // ── Heartbeat — keep user online ──
   useEffect(()=>{
@@ -801,6 +929,7 @@ function ChatRoom({me,onLeave,showToast}){
             })}
           </div>
         </div>
+        <button onClick={()=>setSoundOn(s=>!s)} title={soundOn?"Mute sounds":"Unmute sounds"} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,flexShrink:0,opacity:soundOn?1:0.4}} >{soundOn?"🔔":"🔕"}</button>
         <Avatar user={me} size={28}/>
         <button className="btn-ghost" onClick={onLeave} style={{padding:"5px 11px",fontSize:11,flexShrink:0}}>Leave</button>
       </div>
@@ -810,8 +939,11 @@ function ChatRoom({me,onLeave,showToast}){
         <div className="desktop-sidebar" style={{width:190,borderRight:`1px solid ${BORDER}`,background:SURFACE,display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",padding:"10px 6px"}}>
           <div style={{fontSize:10,color:GOLD,letterSpacing:1,padding:"2px 8px",marginBottom:8}}>ONLINE · {visibleUsers.length}</div>
           {visibleUsers.map(u=>(
-            <div key={u.id} className="sidebar-item" onClick={()=>setShowProfile(u)} style={{display:"flex",alignItems:"center",gap:7,marginBottom:1}}>
-              <Avatar user={u} size={26}/>
+            <div key={u.id} className="sidebar-item" onClick={()=>setShowProfile(u)} style={{display:"flex",alignItems:"center",gap:7,marginBottom:1,position:"relative"}}>
+              <div style={{position:"relative",flexShrink:0}}>
+                <Avatar user={u} size={26}/>
+                {unreadDMs[u.id]&&<div className="notif-dot"/>}
+              </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:12,fontWeight:u.id===me.id?600:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:u.id===me.id?"#C9A84C":"#ccc",display:"flex",alignItems:"center",gap:4}}>
                   <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}{u.id===me.id?" ✦":""}</span>
@@ -923,8 +1055,11 @@ function ChatRoom({me,onLeave,showToast}){
               <>
                 <div style={{fontSize:10,color:"#2a2a2a",marginBottom:10,letterSpacing:1,padding:"0 2px"}}>ACTIVE GUESTS</div>
                 {visibleUsers.map(u=>(
-                  <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"6px 8px",borderRadius:9,cursor:u.id!==me.id?"pointer":"default",transition:"background .15s"}} onClick={()=>{if(u.id!==me.id)setPmTarget(u);}} onMouseEnter={e=>{if(u.id!==me.id)e.currentTarget.style.background=SURFACE2;}} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                    <Avatar user={u} size={28}/>
+                  <div key={u.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,padding:"6px 8px",borderRadius:9,cursor:u.id!==me.id?"pointer":"default",transition:"background .15s"}} onClick={()=>{if(u.id!==me.id){setPmTarget(u);markDMRead(u.id);}}} onMouseEnter={e=>{if(u.id!==me.id)e.currentTarget.style.background=SURFACE2;}} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                    <div style={{position:"relative",flexShrink:0}}>
+                      <Avatar user={u} size={28}/>
+                      {unreadDMs[u.id]&&<div className="notif-dot"/>}
+                    </div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:12,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:u.id===me.id?"#C9A84C":"#ccc"}}>{u.id===me.id?"You":u.name}</div>
                       <div style={{fontSize:10,color:u.status==="away"?"#F59E0B":"#34D399"}}>{u.status||"online"}</div>
@@ -1020,14 +1155,29 @@ function ChatRoom({me,onLeave,showToast}){
       )}
 
       {showProfile&&<ProfileCard user={showProfile} me={me} onClose={()=>setShowProfile(null)} onDM={()=>{setPmTarget(showProfile);setShowProfile(null);}} onBlock={()=>blockUser(showProfile.id)} onReport={reportUser}/>}
-      {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>setPmTarget(null)}/>}
+      {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>{setPmTarget(null);}} notifications={{playSound,pushNotif,markDMRead}}/>}
+      {/* In-app notification popups */}
+      <div style={{position:"fixed",top:70,right:16,zIndex:9998,display:"flex",flexDirection:"column",gap:8,maxWidth:280}}>
+        {notifPopups.map(n=>(
+          <div key={n.id} className="notif-popup" onClick={()=>{if(n.onClick)n.onClick();setNotifPopups(p=>p.filter(x=>x.id!==n.id));}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:20}}>💬</span>
+              <div>
+                <div style={{fontSize:12,color:GOLD,fontWeight:600,marginBottom:2}}>EZChat</div>
+                <div style={{fontSize:13,color:"#ccc"}}>{n.msg}</div>
+              </div>
+              <button onClick={e=>{e.stopPropagation();setNotifPopups(p=>p.filter(x=>x.id!==n.id));}} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:16,marginLeft:"auto",flexShrink:0,fontFamily:"Inter,sans-serif"}}>×</button>
+            </div>
+          </div>
+        ))}
+      </div>
       {selectedImg&&<ImageModal src={selectedImg} onClose={()=>setSelectedImg(null)}/>}
     </div>
   );
 }
 
 // ── Admin Panel ──────────────────────────────────────────────────────────────
-const ADMIN_PIN = "STAFF2025"; // Change this to your staff PIN
+const ADMIN_PIN = "143143"; // Change this to your staff PIN
 
 function AdminLogin({onSuccess,onBack}){
   const [pin,setPin]=useState("");
@@ -1440,10 +1590,19 @@ export default function App(){
 
   // Secret admin access: tap logo 5 times on landing
   const [logoTaps,setLogoTaps]=useState(0);
+  const tapResetRef=useRef(null);
   const tapLogo=()=>{
+    // Clear any existing reset timer
+    if(tapResetRef.current)clearTimeout(tapResetRef.current);
     setLogoTaps(t=>{
-      if(t+1>=5){setScreen("admin");return 0;}
-      return t+1;
+      const next=t+1;
+      if(next>=5){
+        setScreen("admin");
+        return 0;
+      }
+      // Reset tap count after 3 seconds of inactivity
+      tapResetRef.current=setTimeout(()=>setLogoTaps(0),3000);
+      return next;
     });
   };
 
