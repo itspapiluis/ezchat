@@ -702,6 +702,7 @@ function PMPanel({target,me,onClose,notifications}){
 // ── Main Chat Room ────────────────────────────────────────────────────────────
 function ChatRoom({me,onLeave,showToast,notifications}){
   const {soundOn,setSoundOn,unreadDMs,totalUnread,playSound,pushNotif,showPopup,notifPopups,setNotifPopups,markDMRead,addUnreadDM}=notifications;
+  const [showMenu,setShowMenu]=useState(false);
   const [messages,setMessages]=useState([]);
   const [users,setUsers]=useState([]);
   const [input,setInput]=useState("");
@@ -968,7 +969,8 @@ function ChatRoom({me,onLeave,showToast,notifications}){
             })}
           </div>
         </div>
-        <button onClick={()=>setSoundOn(s=>!s)} title={soundOn?"Mute sounds":"Unmute sounds"} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,flexShrink:0,opacity:soundOn?1:0.4}} >{soundOn?"🔔":"🔕"}</button>
+        <button onClick={()=>setSoundOn(s=>!s)} title={soundOn?"Mute sounds":"Unmute sounds"} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,flexShrink:0,opacity:soundOn?1:0.4}}>{soundOn?"🔔":"🔕"}</button>
+        <button onClick={()=>setShowMenu(true)} style={{background:`linear-gradient(135deg,${GOLD_DIM}44,${GOLD_DIM}22)`,border:`1px solid ${GOLD_DIM}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12,color:GOLD,fontFamily:"Inter,sans-serif",fontWeight:600,flexShrink:0,whiteSpace:"nowrap"}}>🍽️ Menu</button>
         <Avatar user={me} size={28}/>
         <button className="btn-ghost" onClick={onLeave} style={{padding:"5px 11px",fontSize:11,flexShrink:0}}>Leave</button>
       </div>
@@ -1126,6 +1128,7 @@ function ChatRoom({me,onLeave,showToast,notifications}){
                   <div>🔒 Wi-Fi secured chat</div>
                   <div>🍸 Hidden Bar inside</div>
                 </div>
+                <button onClick={()=>setShowMenu(true)} style={{width:"100%",marginTop:14,padding:"10px 0",background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:10,color:"#080808",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>🍽️ View Full Menu</button>
               </>
             )}
           </div>
@@ -1134,8 +1137,8 @@ function ChatRoom({me,onLeave,showToast,notifications}){
 
       {/* Mobile bottom nav */}
       <div className="mobile-only" style={{borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,flexDirection:"row",zIndex:10}}>
-        {[["chat","💬","Chat"],["guests","👥","Guests"],["venue","✦","Venue"]].map(([v,icon,label])=>(
-          <button key={v} onClick={()=>setMobileTab(v)} style={{flex:1,padding:"10px 4px 8px",background:"none",border:"none",borderTop:`2px solid ${mobileTab===v?GOLD:"transparent"}`,color:mobileTab===v?GOLD:"#444",fontFamily:"Inter,sans-serif",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s",position:"relative"}}>
+        {[["chat","💬","Chat"],["guests","👥","Guests"],["menu_btn","🍽️","Menu"],["venue","✦","Venue"]].map(([v,icon,label])=>(
+          <button key={v} onClick={()=>{if(v==="menu_btn"){setShowMenu(true);}else{setMobileTab(v);}}} style={{flex:1,padding:"10px 4px 8px",background:"none",border:"none",borderTop:`2px solid ${mobileTab===v?GOLD:"transparent"}`,color:mobileTab===v?GOLD:"#444",fontFamily:"Inter,sans-serif",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s",position:"relative"}}>
             <div style={{position:"relative"}}>
               <span style={{fontSize:18}}>{icon}</span>
               {v==="guests"&&totalUnread>0&&<div style={{position:"absolute",top:-4,right:-6,background:"#F87171",color:"#fff",borderRadius:10,padding:"0px 4px",fontSize:9,fontWeight:700,minWidth:14,textAlign:"center",lineHeight:"14px"}}>{totalUnread}</div>}
@@ -1201,6 +1204,7 @@ function ChatRoom({me,onLeave,showToast,notifications}){
 
       {showProfile&&<ProfileCard user={showProfile} me={me} onClose={()=>setShowProfile(null)} onDM={()=>{setPmTarget(showProfile);setShowProfile(null);}} onBlock={()=>blockUser(showProfile.id)} onReport={reportUser}/>}
       {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>{setPmTarget(null);}} notifications={{playSound,pushNotif,markDMRead}}/>}
+      {showMenu&&<MenuModal onClose={()=>setShowMenu(false)}/>}
       {/* In-app notification popups */}
       <div style={{position:"fixed",top:70,right:16,zIndex:9998,display:"flex",flexDirection:"column",gap:8,maxWidth:280}}>
         {notifPopups.map(n=>(
@@ -1217,6 +1221,295 @@ function ChatRoom({me,onLeave,showToast,notifications}){
         ))}
       </div>
       {selectedImg&&<ImageModal src={selectedImg} onClose={()=>setSelectedImg(null)}/>}
+    </div>
+  );
+}
+
+
+// ── Guest Menu Modal ─────────────────────────────────────────────────────────
+function MenuModal({onClose}){
+  const [categories,setCategories]=useState([]);
+  const [items,setItems]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [menuTab,setMenuTab]=useState("food");
+  const [activeCat,setActiveCat]=useState(null);
+
+  useEffect(()=>{
+    const load=async()=>{
+      setLoading(true);
+      const {data:cats}=await supabase.from("menu_categories").select("*").order("sort_order");
+      const {data:itms}=await supabase.from("menu_items").select("*").eq("available",true).order("sort_order");
+      if(cats)setCategories(cats);
+      if(itms)setItems(itms);
+      if(cats&&cats.length>0){
+        const first=cats.find(c=>c.type==="food");
+        if(first)setActiveCat(first.id);
+      }
+      setLoading(false);
+    };
+    load();
+  },[]);
+
+  const tabs=[
+    {value:"food",label:"🍽️ Food"},
+    {value:"drinks",label:"🍹 Drinks"},
+    {value:"spirits",label:"🥃 Spirits"},
+  ];
+
+  const filteredCats=categories.filter(c=>c.type===menuTab);
+  const activeItems=items.filter(i=>i.category_id===activeCat);
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:680,height:"90dvh",background:BG,borderRadius:"20px 20px 0 0",border:`1px solid ${BORDER}`,borderBottom:"none",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+        {/* Header */}
+        <div style={{padding:"16px 20px 0",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:900}} className="gold-text">EasyCart Menu</div>
+              <div style={{fontSize:12,color:"#555",marginTop:2}}>Bar Chow's & Spirits</div>
+            </div>
+            <button onClick={onClose} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:"50%",width:36,height:36,cursor:"pointer",color:"#888",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>×</button>
+          </div>
+          {/* Main tabs */}
+          <div style={{display:"flex",gap:8,marginBottom:14}}>
+            {tabs.map(t=>(
+              <button key={t.value} onClick={()=>{setMenuTab(t.value);const first=categories.find(c=>c.type===t.value);if(first)setActiveCat(first.id);}} style={{flex:1,padding:"9px 4px",background:menuTab===t.value?`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`:"transparent",border:`1px solid ${menuTab===t.value?GOLD:BORDER}`,borderRadius:10,color:menuTab===t.value?"#080808":"#666",fontSize:13,fontWeight:menuTab===t.value?700:400,cursor:"pointer",fontFamily:"Inter,sans-serif",transition:"all .2s"}}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
+          {/* Category list */}
+          <div style={{width:130,borderRight:`1px solid ${BORDER}`,overflowY:"auto",flexShrink:0,padding:"8px 4px"}}>
+            {loading?[1,2,3,4].map(i=><div key={i} className="skel" style={{height:44,margin:"4px 4px",borderRadius:8}}/>):
+            filteredCats.map(c=>(
+              <button key={c.id} onClick={()=>setActiveCat(c.id)} style={{width:"100%",padding:"10px 8px",background:activeCat===c.id?`rgba(201,168,76,0.12)`:"transparent",border:`1px solid ${activeCat===c.id?GOLD_DIM:"transparent"}`,borderRadius:10,cursor:"pointer",marginBottom:4,textAlign:"left",fontFamily:"Inter,sans-serif",transition:"all .15s"}}>
+                <div style={{fontSize:16,marginBottom:2}}>{c.icon}</div>
+                <div style={{fontSize:11,color:activeCat===c.id?GOLD:"#888",fontWeight:activeCat===c.id?600:400,lineHeight:1.3}}>{c.name}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Items list */}
+          <div style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
+            {loading?[1,2,3,4,5].map(i=><div key={i} className="skel" style={{height:52,marginBottom:8,borderRadius:10}}/>):
+            activeItems.length===0?<div style={{color:"#444",textAlign:"center",padding:40,fontSize:14}}>No items in this category</div>:
+            activeItems.map((item,idx)=>(
+              <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"13px 14px",marginBottom:8,background:idx%2===0?SURFACE:SURFACE2,borderRadius:12,border:`1px solid ${BORDER}`,transition:"all .15s"}}
+                onMouseEnter={e=>e.currentTarget.style.borderColor=GOLD_DIM}
+                onMouseLeave={e=>e.currentTarget.style.borderColor=BORDER}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:500,color:"#e8e0d0",marginBottom:item.description?3:0}}>{item.name}</div>
+                  {item.description&&<div style={{fontSize:11,color:"#555",lineHeight:1.4}}>{item.description}</div>}
+                </div>
+                <div style={{flexShrink:0,marginLeft:12,textAlign:"right"}}>
+                  <div style={{fontSize:15,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>₱{Number(item.price).toLocaleString()}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"10px 20px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,textAlign:"center"}}>
+          <div style={{fontSize:11,color:"#444"}}>🔒 Prices may change · Ask staff for today's specials</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Admin Menu Editor ─────────────────────────────────────────────────────────
+function AdminMenuEditor(){
+  const [categories,setCategories]=useState([]);
+  const [items,setItems]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [menuTab,setMenuTab]=useState("food");
+  const [activeCat,setActiveCat]=useState(null);
+  const [editingItem,setEditingItem]=useState(null);
+  const [newItem,setNewItem]=useState({name:"",price:"",description:""});
+  const [newCatName,setNewCatName]=useState("");
+  const [newCatIcon,setNewCatIcon]=useState("🍽️");
+  const [showAddCat,setShowAddCat]=useState(false);
+  const {toasts,show:showToast}=useToast();
+
+  useEffect(()=>{loadMenu();},[]);
+
+  const loadMenu=async()=>{
+    setLoading(true);
+    const {data:cats}=await supabase.from("menu_categories").select("*").order("sort_order");
+    const {data:itms}=await supabase.from("menu_items").select("*").order("sort_order");
+    if(cats)setCategories(cats);
+    if(itms)setItems(itms);
+    if(cats&&cats.length>0&&!activeCat){
+      const first=cats.find(c=>c.type==="food");
+      if(first)setActiveCat(first.id);
+    }
+    setLoading(false);
+  };
+
+  const addItem=async()=>{
+    if(!newItem.name.trim()||!newItem.price)return;
+    const {error}=await supabase.from("menu_items").insert({
+      category_id:activeCat,name:newItem.name.trim(),
+      price:Number(newItem.price),description:newItem.description.trim()||null,
+      available:true,sort_order:items.filter(i=>i.category_id===activeCat).length+1
+    });
+    if(error){showToast("Error: "+error.message);return;}
+    setNewItem({name:"",price:"",description:""});
+    showToast("Item added ✦");
+    loadMenu();
+  };
+
+  const saveItem=async(item)=>{
+    const {error}=await supabase.from("menu_items").update({
+      name:item.name,price:Number(item.price),
+      description:item.description||null,available:item.available
+    }).eq("id",item.id);
+    if(error){showToast("Error: "+error.message);return;}
+    setEditingItem(null);
+    showToast("Item saved ✦");
+    loadMenu();
+  };
+
+  const deleteItem=async(id)=>{
+    setItems(p=>p.filter(i=>i.id!==id));
+    await supabase.from("menu_items").delete().eq("id",id);
+    showToast("Item removed");
+  };
+
+  const toggleAvailable=async(item)=>{
+    await supabase.from("menu_items").update({available:!item.available}).eq("id",item.id);
+    setItems(p=>p.map(i=>i.id===item.id?{...i,available:!i.available}:i));
+  };
+
+  const addCategory=async()=>{
+    if(!newCatName.trim())return;
+    const {error}=await supabase.from("menu_categories").insert({
+      name:newCatName.trim(),icon:newCatIcon,type:menuTab,
+      sort_order:categories.filter(c=>c.type===menuTab).length+1
+    });
+    if(error){showToast("Error: "+error.message);return;}
+    setNewCatName("");setShowAddCat(false);
+    showToast("Category added ✦");
+    loadMenu();
+  };
+
+  const deleteCategory=async(id)=>{
+    await supabase.from("menu_categories").delete().eq("id",id);
+    if(activeCat===id)setActiveCat(null);
+    showToast("Category removed");
+    loadMenu();
+  };
+
+  const tabs=[{value:"food",label:"🍽️ Food"},{value:"drinks",label:"🍹 Drinks"},{value:"spirits",label:"🥃 Spirits"}];
+  const filteredCats=categories.filter(c=>c.type===menuTab);
+  const activeItems=items.filter(i=>i.category_id===activeCat);
+  const ICONS=["🍽️","🍟","🍜","🦑","🥩","🍗","🍚","🍺","🍹","🥃","🍸","🥤","🔥","❄️","🌵","🍷","🧊","🗼"];
+
+  return(
+    <div style={{display:"flex",flexDirection:"column",height:"100%"}}>
+      {/* Tabs */}
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {tabs.map(t=>(
+          <button key={t.value} onClick={()=>{setMenuTab(t.value);const first=categories.find(c=>c.type===t.value);if(first)setActiveCat(first.id);else setActiveCat(null);}} style={{flex:1,padding:"9px 4px",background:menuTab===t.value?`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`:"transparent",border:`1px solid ${menuTab===t.value?GOLD:BORDER}`,borderRadius:10,color:menuTab===t.value?"#080808":"#666",fontSize:13,fontWeight:menuTab===t.value?700:400,cursor:"pointer",fontFamily:"Inter,sans-serif",transition:"all .2s"}}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{flex:1,display:"flex",gap:12,overflow:"hidden",minHeight:0}}>
+        {/* Categories */}
+        <div style={{width:160,flexShrink:0,display:"flex",flexDirection:"column",gap:6}}>
+          <div style={{fontSize:10,color:GOLD,letterSpacing:1,marginBottom:4}}>CATEGORIES</div>
+          <div style={{flex:1,overflowY:"auto"}}>
+            {filteredCats.map(c=>(
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 8px",background:activeCat===c.id?`rgba(201,168,76,0.1)`:SURFACE2,border:`1px solid ${activeCat===c.id?GOLD_DIM:BORDER}`,borderRadius:9,marginBottom:5,cursor:"pointer",transition:"all .15s"}} onClick={()=>setActiveCat(c.id)}>
+                <span style={{fontSize:14}}>{c.icon}</span>
+                <span style={{flex:1,fontSize:12,color:activeCat===c.id?GOLD:"#ccc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span>
+                <button onClick={e=>{e.stopPropagation();deleteCategory(c.id);}} style={{background:"none",border:"none",color:"#F87171",cursor:"pointer",fontSize:13,flexShrink:0,fontFamily:"Inter,sans-serif",opacity:.7}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}>×</button>
+              </div>
+            ))}
+          </div>
+          {!showAddCat?(
+            <button onClick={()=>setShowAddCat(true)} style={{padding:"8px",background:`rgba(201,168,76,0.08)`,border:`1px dashed ${GOLD_DIM}`,borderRadius:8,color:GOLD,cursor:"pointer",fontSize:12,fontFamily:"Inter,sans-serif"}}>+ Add Category</button>
+          ):(
+            <div style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:10}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:8}}>
+                {ICONS.map(ic=>(
+                  <button key={ic} onClick={()=>setNewCatIcon(ic)} style={{background:newCatIcon===ic?`rgba(201,168,76,0.2)`:"none",border:`1px solid ${newCatIcon===ic?GOLD_DIM:"transparent"}`,borderRadius:6,padding:3,fontSize:16,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>{ic}</button>
+                ))}
+              </div>
+              <input value={newCatName} onChange={e=>setNewCatName(e.target.value)} placeholder="Category name" style={{width:"100%",padding:"7px 8px",fontSize:12,marginBottom:6,borderRadius:6}}/>
+              <div style={{display:"flex",gap:4}}>
+                <button className="btn-gold" onClick={addCategory} style={{flex:1,padding:"6px 4px",fontSize:11,borderRadius:6}}>Add</button>
+                <button className="btn-ghost" onClick={()=>setShowAddCat(false)} style={{flex:1,padding:"6px 4px",fontSize:11,borderRadius:6}}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Items */}
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+          {!activeCat?(
+            <div style={{color:"#444",textAlign:"center",padding:40,fontSize:14}}>Select a category</div>
+          ):(
+            <>
+              {/* Add new item */}
+              <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:12,marginBottom:12,flexShrink:0}}>
+                <div style={{fontSize:10,color:GOLD,letterSpacing:1,marginBottom:8}}>ADD NEW ITEM</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <input value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))} placeholder="Item name" style={{flex:2,minWidth:120,padding:"8px 10px",fontSize:13,borderRadius:7}}/>
+                  <input value={newItem.price} onChange={e=>setNewItem(p=>({...p,price:e.target.value}))} placeholder="₱ Price" type="number" style={{flex:1,minWidth:80,padding:"8px 10px",fontSize:13,borderRadius:7}}/>
+                  <input value={newItem.description} onChange={e=>setNewItem(p=>({...p,description:e.target.value}))} placeholder="Description (optional)" style={{flex:3,minWidth:140,padding:"8px 10px",fontSize:13,borderRadius:7}}/>
+                  <button className="btn-gold" onClick={addItem} style={{padding:"8px 14px",fontSize:13,borderRadius:7,flexShrink:0}}>Add ✦</button>
+                </div>
+              </div>
+
+              {/* Items list */}
+              <div style={{flex:1,overflowY:"auto"}}>
+                {loading?[1,2,3].map(i=><div key={i} className="skel" style={{height:50,marginBottom:8,borderRadius:10}}/>):
+                activeItems.length===0?<div style={{color:"#444",textAlign:"center",padding:32,fontSize:13}}>No items yet. Add one above.</div>:
+                activeItems.map(item=>(
+                  <div key={item.id} style={{background:SURFACE,border:`1px solid ${item.available?BORDER:"rgba(248,113,113,0.2)"}`,borderRadius:10,padding:"10px 12px",marginBottom:6,opacity:item.available?1:0.6}}>
+                    {editingItem?.id===item.id?(
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        <div style={{display:"flex",gap:6}}>
+                          <input value={editingItem.name} onChange={e=>setEditingItem(p=>({...p,name:e.target.value}))} style={{flex:2,padding:"7px 10px",fontSize:13,borderRadius:7}}/>
+                          <input value={editingItem.price} onChange={e=>setEditingItem(p=>({...p,price:e.target.value}))} type="number" style={{flex:1,padding:"7px 10px",fontSize:13,borderRadius:7}}/>
+                        </div>
+                        <input value={editingItem.description||""} onChange={e=>setEditingItem(p=>({...p,description:e.target.value}))} placeholder="Description" style={{width:"100%",padding:"7px 10px",fontSize:12,borderRadius:7}}/>
+                        <div style={{display:"flex",gap:6}}>
+                          <button className="btn-gold" onClick={()=>saveItem(editingItem)} style={{flex:1,padding:"7px",fontSize:12,borderRadius:7}}>Save ✦</button>
+                          <button className="btn-ghost" onClick={()=>setEditingItem(null)} style={{flex:1,padding:"7px",fontSize:12,borderRadius:7}}>Cancel</button>
+                        </div>
+                      </div>
+                    ):(
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:13,color:"#e8e0d0",fontWeight:500}}>{item.name}</div>
+                          {item.description&&<div style={{fontSize:11,color:"#555",marginTop:1}}>{item.description}</div>}
+                        </div>
+                        <div style={{fontSize:14,fontWeight:700,color:GOLD,flexShrink:0}}>₱{Number(item.price).toLocaleString()}</div>
+                        <div style={{display:"flex",gap:4,flexShrink:0}}>
+                          <button onClick={()=>toggleAvailable(item)} title={item.available?"Mark unavailable":"Mark available"} style={{background:item.available?"rgba(52,211,153,0.08)":"rgba(248,113,113,0.08)",border:`1px solid ${item.available?"rgba(52,211,153,0.3)":"rgba(248,113,113,0.3)"}`,borderRadius:6,width:28,height:28,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>{item.available?"✅":"❌"}</button>
+                          <button onClick={()=>setEditingItem({...item})} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,width:28,height:28,cursor:"pointer",color:"#888",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>✏️</button>
+                          <button onClick={()=>deleteItem(item.id)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:6,width:28,height:28,cursor:"pointer",color:"#F87171",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>×</button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      {toasts.map(t=><div key={t.id} className="toast">✦ {t.msg}</div>)}
     </div>
   );
 }
@@ -1473,7 +1766,7 @@ function AdminPanel({onLogout}){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
-        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["settings","⚙️ Settings"]].map(([v,l])=>(
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -1659,6 +1952,16 @@ function AdminPanel({onLogout}){
         )}
 
       </div>
+
+      {/* ── MENU ── */}
+      {tab==="menu"&&(
+        <div style={{maxWidth:900,margin:"0 auto",height:"calc(100vh - 160px)",display:"flex",flexDirection:"column"}}>
+          <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:16}}>MENU MANAGEMENT — Edit items, prices, and availability</div>
+          <div style={{flex:1,overflow:"hidden"}}>
+            <AdminMenuEditor/>
+          </div>
+        </div>
+      )}
 
       {/* ── SETTINGS ── */}
       {tab==="settings"&&(
