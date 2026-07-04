@@ -1302,6 +1302,105 @@ function ChatRoom({me,onLeave,showToast,notifications}){
   );
 }
 
+// ── Guest Menu Modal ─────────────────────────────────────────────────────────
+function MenuModal({onClose}){
+  const [categories,setCategories]=useState([]);
+  const [items,setItems]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [menuTab,setMenuTab]=useState("food");
+  const [activeCat,setActiveCat]=useState(null);
+
+  useEffect(()=>{
+    const load=async()=>{
+      setLoading(true);
+      const {data:cats}=await supabase.from("menu_categories").select("*").order("sort_order");
+      const {data:itms}=await supabase.from("menu_items").select("*").eq("available",true).order("sort_order");
+      if(cats){
+        setCategories(cats);
+        const first=cats.find(c=>c.type==="food");
+        if(first)setActiveCat(first.id);
+      }
+      if(itms)setItems(itms);
+      setLoading(false);
+    };
+    load();
+  },[]);
+
+  const tabs=[
+    {value:"food",label:"🍽️ Food"},
+    {value:"drinks",label:"🍹 Drinks"},
+    {value:"spirits",label:"🥃 Spirits"},
+  ];
+
+  const filteredCats=categories.filter(c=>c.type===menuTab);
+  const activeItems=items.filter(i=>i.category_id===activeCat);
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:500,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:680,height:"90dvh",background:BG,borderRadius:"20px 20px 0 0",border:`1px solid ${BORDER}`,borderBottom:"none",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+
+        {/* Header */}
+        <div style={{padding:"16px 16px 0",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+            <div>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:900}} className="gold-text">EasyCart Menu</div>
+              <div style={{fontSize:11,color:"#555",marginTop:1}}>Bar Chow's & Spirits</div>
+            </div>
+            <button onClick={onClose} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:"50%",width:34,height:34,cursor:"pointer",color:"#888",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif",flexShrink:0}}>×</button>
+          </div>
+          {/* Main tabs */}
+          <div style={{display:"flex",gap:6,marginBottom:12}}>
+            {tabs.map(t=>(
+              <button key={t.value} onClick={()=>{
+                setMenuTab(t.value);
+                const first=categories.find(c=>c.type===t.value);
+                if(first)setActiveCat(first.id);
+              }} style={{flex:1,padding:"8px 4px",background:menuTab===t.value?`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`:"transparent",border:`1px solid ${menuTab===t.value?GOLD:BORDER}`,borderRadius:10,color:menuTab===t.value?"#080808":"#666",fontSize:12,fontWeight:menuTab===t.value?700:400,cursor:"pointer",fontFamily:"Inter,sans-serif",transition:"all .2s"}}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
+          {/* Category list */}
+          <div style={{width:110,borderRight:`1px solid ${BORDER}`,overflowY:"auto",flexShrink:0,padding:"6px 4px",WebkitOverflowScrolling:"touch"}}>
+            {loading?[1,2,3,4].map(i=><div key={i} className="skel" style={{height:48,margin:"4px",borderRadius:8}}/>):
+            filteredCats.map(c=>(
+              <button key={c.id} onClick={()=>setActiveCat(c.id)} style={{width:"100%",padding:"8px 6px",background:activeCat===c.id?`rgba(201,168,76,0.12)`:"transparent",border:`1px solid ${activeCat===c.id?GOLD_DIM:"transparent"}`,borderRadius:10,cursor:"pointer",marginBottom:4,textAlign:"left",fontFamily:"Inter,sans-serif",transition:"all .15s"}}>
+                <div style={{fontSize:18,marginBottom:2,textAlign:"center"}}>{c.icon}</div>
+                <div style={{fontSize:10,color:activeCat===c.id?GOLD:"#888",fontWeight:activeCat===c.id?600:400,lineHeight:1.3,textAlign:"center"}}>{c.name}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Items list */}
+          <div style={{flex:1,overflowY:"auto",padding:"10px 12px",WebkitOverflowScrolling:"touch"}}>
+            {loading?[1,2,3,4,5].map(i=><div key={i} className="skel" style={{height:48,marginBottom:8,borderRadius:10}}/>):
+            activeItems.length===0?<div style={{color:"#444",textAlign:"center",padding:40,fontSize:13}}>No items in this category</div>:
+            activeItems.map((item,idx)=>(
+              <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 12px",marginBottom:6,background:idx%2===0?SURFACE:SURFACE2,borderRadius:10,border:`1px solid ${BORDER}`}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:500,color:"#e8e0d0"}}>{item.name}</div>
+                  {item.description&&<div style={{fontSize:10,color:"#555",marginTop:1,lineHeight:1.4}}>{item.description}</div>}
+                </div>
+                <div style={{flexShrink:0,marginLeft:10}}>
+                  <div style={{fontSize:14,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>₱{Number(item.price).toLocaleString()}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={{padding:"8px 16px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,textAlign:"center"}}>
+          <div style={{fontSize:10,color:"#444"}}>🔒 Prices may change · Ask staff for today's specials</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Admin Menu Editor ─────────────────────────────────────────────────────────
 function AdminMenuEditor(){
   const [categories,setCategories]=useState([]);
