@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@supabase/supabase-js";
 
 // ── Supabase client ───────────────────────────────────────────────────────────
@@ -20,6 +20,55 @@ const VENUE_WIFI = "EasyCart_VIP";
 const VENUE_NAME = "EasyCart Barcade & Lounge";
 const VENUE_LOCATION = "Catarman, Northern Samar";
 const ROOM_ID = "easycart-main";
+
+// ── Table system ──────────────────────────────────────────────────────────────
+const ALL_TABLES = [
+  "L1","L2","L3",
+  "R1","R2","R3","R4",
+  "C1","C2","C3","C4",
+  "D1","D2","D3","D4","D5",
+  "B1","B2","B3","B4","B5","B6","B7",
+  "M1",
+  "F1","F2","F3",
+  "KTV ROOM 1","KTV ROOM 2",
+  "SAPPHIRE","RUBY","DIAMOND",
+];
+
+function getTableFromURL(){
+  try{
+    const p = new URLSearchParams(window.location.search);
+    const t = p.get("table");
+    if(t && ALL_TABLES.includes(t.toUpperCase())) return t.toUpperCase();
+    // Try case-insensitive match for KTV rooms etc.
+    if(t){
+      const match = ALL_TABLES.find(x=>x.toLowerCase()===t.toLowerCase());
+      if(match) return match;
+    }
+    return null;
+  }catch(e){return null;}
+}
+
+// Get or create open tab for this table
+async function getOrCreateTab(tableId){
+  // Check for existing open tab
+  const {data:existing} = await supabase
+    .from("table_tabs")
+    .select("*")
+    .eq("table_id", tableId)
+    .eq("status", "open")
+    .single();
+  if(existing) return existing;
+  // Create new tab
+  const {data:created} = await supabase
+    .from("table_tabs")
+    .insert({table_id: tableId, status:"open", total:0})
+    .select()
+    .single();
+  return created;
+}
+
+// Format price
+const fmtPrice = (n) => "₱" + Number(n).toLocaleString("en-PH",{minimumFractionDigits:2,maximumFractionDigits:2});
 // Access code is loaded from Supabase (managed in Admin Panel)
 
 const GENDERS = [
@@ -308,7 +357,7 @@ function Loading({label="CONNECTING…",sub=""}){
 }
 
 // ── Landing page ──────────────────────────────────────────────────────────────
-function Landing({onJoin,onAdminTap}){
+function Landing({onJoin,onAdminTap,tableId}){
   const [scroll,setScroll]=useState(0);
   const [annIdx,setAnnIdx]=useState(0);
   const [announcements,setAnnouncements]=useState([
@@ -369,9 +418,19 @@ function Landing({onJoin,onAdminTap}){
         <div style={{marginBottom:28}}>
           <img src={LOGO_SRC} alt="EasyCart" onClick={onAdminTap} style={{width:110,height:110,objectFit:"contain",background:"#fff",borderRadius:20,padding:8,border:`1px solid ${GOLD_DIM}44`,cursor:"default"}}/>
         </div>
-        <div style={{background:"rgba(201,168,76,0.08)",border:`1px solid ${GOLD_DIM}44`,borderRadius:20,padding:"5px 16px",fontSize:12,color:GOLD,marginBottom:20,letterSpacing:1.5}}>
+        <div style={{background:"rgba(201,168,76,0.08)",border:`1px solid ${GOLD_DIM}44`,borderRadius:20,padding:"5px 16px",fontSize:12,color:GOLD,marginBottom:12,letterSpacing:1.5}}>
           ✦ {VENUE_LOCATION.toUpperCase()}
         </div>
+        {tableId&&(
+          <div style={{background:`rgba(52,211,153,0.08)`,border:`1px solid rgba(52,211,153,0.3)`,borderRadius:12,padding:"6px 18px",fontSize:13,color:"#34D399",marginBottom:12,display:"flex",alignItems:"center",gap:6}}>
+            <span>📍</span><span>Table <strong>{tableId}</strong> — Ready to order</span>
+          </div>
+        )}
+        {!tableId&&(
+          <div style={{background:`rgba(245,158,11,0.06)`,border:`1px solid rgba(245,158,11,0.2)`,borderRadius:12,padding:"6px 18px",fontSize:12,color:"#888",marginBottom:12}}>
+            💡 Scan the QR code at your table to place orders
+          </div>
+        )}
         <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(38px,6.5vw,80px)",fontWeight:900,lineHeight:1.06,marginBottom:20,maxWidth:820}}>
           <span className="gold-text">Meet Everyone</span><br/>
           <span style={{color:"#e8e0d0"}}>In the Bar Tonight</span>
@@ -443,8 +502,8 @@ function Landing({onJoin,onAdminTap}){
 }
 
 // ── Entry screen ──────────────────────────────────────────────────────────────
-function Entry({onEnter,wifiOk}){
-  const [step,setStep]=useState("access"); // "access" | "profile"
+function Entry({onEnter,wifiOk,tableId}){
+  const [step,setStep]=useState(tableId?"profile":"access"); // skip access code if table QR
   const [accessCode,setAccessCode]=useState("");
   const [accessError,setAccessError]=useState("");
   const [nickname,setNickname]=useState("");
@@ -559,6 +618,11 @@ function Entry({onEnter,wifiOk}){
           <img src={LOGO_SRC} alt="EasyCart" style={{width:60,height:60,objectFit:"contain",background:"#fff",borderRadius:12,padding:4,marginBottom:10}}/>
           <h1 style={{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:900,marginBottom:4}} className="gold-text">Set Up Your Profile</h1>
           <p style={{color:"#555",fontSize:13}}>{VENUE_NAME}</p>
+          {tableId&&(
+            <div style={{marginTop:8,display:"inline-flex",alignItems:"center",gap:6,background:`rgba(52,211,153,0.08)`,border:`1px solid rgba(52,211,153,0.25)`,borderRadius:10,padding:"5px 14px",fontSize:12,color:"#34D399"}}>
+              📍 Table <strong>{tableId}</strong>
+            </div>
+          )}
         </div>
 
         {/* Real name - private */}
@@ -765,9 +829,10 @@ function PMPanel({target,me,onClose,notifications}){
 }
 
 // ── Main Chat Room ────────────────────────────────────────────────────────────
-function ChatRoom({me,onLeave,showToast,notifications}){
+function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   const {soundOn,setSoundOn,unreadDMs,totalUnread,playSound,pushNotif,showPopup,notifPopups,setNotifPopups,markDMRead,addUnreadDM}=notifications;
   const [showMenu,setShowMenu]=useState(false);
+  const hasTable = !!tableId;
   const [messages,setMessages]=useState([]);
   const [users,setUsers]=useState([]);
   const [input,setInput]=useState("");
@@ -1007,6 +1072,13 @@ function ChatRoom({me,onLeave,showToast,notifications}){
   const visibleUsers=users.filter(u=>!blockedIds.includes(u.id)&&u.status!=="offline");
   const visibleMsgs=messages.filter(m=>!blockedIds.includes(m.user_id));
 
+  // Inner component to access CartContext inside ChatRoom
+  function ReceiptDisplay(){
+    const ctx = hasTable ? useCart() : null;
+    if(!ctx?.showReceipt) return null;
+    return <ReceiptPopup receipt={ctx.showReceipt} onClose={()=>ctx.setShowReceipt(null)}/>;
+  }
+
   return(
     <div style={{height:"100dvh",display:"flex",flexDirection:"column",background:BG,overflow:"hidden",position:"fixed",inset:0}} onClick={()=>showEmoji&&setShowEmoji(false)}>
 
@@ -1196,84 +1268,83 @@ function ChatRoom({me,onLeave,showToast,notifications}){
       {/* ── MOBILE BOTTOM NAV ─────────────────────────────────── */}
       <div className="mobile-only" style={{height:54,minHeight:54,borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,flexDirection:"row",zIndex:20,alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom,0px)"}}>
         {[
-          {v:"chat",icon:"💬",label:"Chat"},
-          {v:"guests",icon:"👥",label:"Guests"},
-          {v:"menu_btn",icon:"🍽️",label:"Menu"},
-          {v:"venue",icon:"✦",label:"Venue"},
-        ].map(({v,icon,label})=>(
-          <button key={v} onClick={()=>{if(v==="menu_btn"){setShowMenu(true);}else{setMobileTab(v);}}}
-            style={{flex:1,padding:"6px 2px 4px",background:"none",border:"none",
-              borderTop:`2px solid ${v!=="menu_btn"&&mobileTab===v?GOLD:"transparent"}`,
-              color:v!=="menu_btn"&&mobileTab===v?GOLD:"#555",
-              fontFamily:"Inter,sans-serif",cursor:"pointer",
-              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,
-              transition:"color .2s",position:"relative"}}>
-            <div style={{position:"relative"}}>
-              <span style={{fontSize:19,lineHeight:1}}>{icon}</span>
-              {v==="guests"&&totalUnread>0&&(
-                <div style={{position:"absolute",top:-3,right:-5,background:"#F87171",color:"#fff",borderRadius:10,padding:"0 3px",fontSize:8,fontWeight:700,minWidth:12,textAlign:"center",lineHeight:"12px"}}>{totalUnread}</div>
-              )}
-            </div>
-            <span style={{fontSize:9,letterSpacing:.3}}>{label}</span>
-          </button>
-        ))}
+          {v:"chat",   icon:"💬", label:"Chat"},
+          {v:"menu_tab",icon:"🍽️",label:"Menu"},
+          ...(hasTable?[
+            {v:"cart",   icon:"🛒", label:"Cart"},
+            {v:"bill",   icon:"🧾", label:"Bill"},
+          ]:[]),
+          {v:"more",   icon:"•••",label:"More"},
+        ].map(({v,icon,label})=>{
+          const isActive = mobileTab===v;
+          const cartBadge = v==="cart" && hasTable ? (useCart()?.cartCount||0) : 0;
+          return(
+            <button key={v} onClick={()=>{
+              if(v==="menu_tab"){setShowMenu(true);}
+              else{setMobileTab(v);}
+            }}
+              style={{flex:1,padding:"6px 2px 4px",background:"none",border:"none",
+                borderTop:`2px solid ${isActive&&v!=="menu_tab"?GOLD:"transparent"}`,
+                color:isActive&&v!=="menu_tab"?GOLD:"#555",
+                fontFamily:"Inter,sans-serif",cursor:"pointer",
+                display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,
+                transition:"color .2s",position:"relative"}}>
+              <div style={{position:"relative"}}>
+                <span style={{fontSize:v==="more"?14:19,lineHeight:1,fontWeight:v==="more"?700:"normal"}}>{icon}</span>
+                {v==="more"&&totalUnread>0&&(
+                  <div style={{position:"absolute",top:-3,right:-6,background:"#F87171",color:"#fff",borderRadius:10,padding:"0 3px",fontSize:8,fontWeight:700,minWidth:12,textAlign:"center",lineHeight:"12px"}}>{totalUnread}</div>
+                )}
+                {cartBadge>0&&(
+                  <div style={{position:"absolute",top:-3,right:-6,background:GOLD,color:"#080808",borderRadius:10,padding:"0 3px",fontSize:8,fontWeight:700,minWidth:12,textAlign:"center",lineHeight:"12px"}}>{cartBadge}</div>
+                )}
+              </div>
+              <span style={{fontSize:9,letterSpacing:.3}}>{label}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* ── MOBILE PANELS (full-screen overlays) ─────────────── */}
-      {mobileTab==="guests"&&(
+      {/* Cart Tab */}
+      {mobileTab==="cart"&&hasTable&&(
         <div className="mobile-only" style={{position:"fixed",top:50,left:0,right:0,bottom:54,background:BG,zIndex:100,flexDirection:"column",overflow:"hidden"}}>
           <div style={{padding:"12px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE,flexShrink:0}}>
-            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>Guests Online · {visibleUsers.length}</span>
+            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>🛒 Your Cart</span>
             <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
           </div>
-          <div style={{flex:1,overflowY:"auto",padding:12,WebkitOverflowScrolling:"touch"}}>
-            {visibleUsers.map(u=>(
-              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 10px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}}
-                onClick={()=>{if(u.id!==me.id){setPmTarget(u);markDMRead(u.id);setMobileTab("chat");}}}>
-                <div style={{position:"relative",flexShrink:0}}>
-                  <Avatar user={u} size={38}/>
-                  {unreadDMs[u.id]&&<div className="notif-dot"/>}
-                </div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:14,fontWeight:500,color:u.id===me.id?GOLD:"#ccc",display:"flex",alignItems:"center",gap:6}}>
-                    <span>{u.id===me.id?"You":u.name}</span>
-                    {u.gender&&<span style={{fontSize:13}}>{u.gender==="male"?"👨":u.gender==="female"?"👩":["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)?"🏳️‍🌈":"🤐"}</span>}
-                  </div>
-                  <div style={{fontSize:11,color:u.status==="online"?"#34D399":"#F59E0B",marginTop:2}}>{u.status||"online"}</div>
-                </div>
-                {u.id!==me.id&&<span style={{fontSize:12,color:GOLD_DIM,background:`rgba(201,168,76,0.08)`,padding:"4px 10px",borderRadius:8,border:`1px solid ${GOLD_DIM}44`,flexShrink:0}}>DM</span>}
-              </div>
-            ))}
-          </div>
+          <CartTab me={me}/>
         </div>
       )}
 
-      {mobileTab==="venue"&&(
+      {/* Bill Tab */}
+      {mobileTab==="bill"&&hasTable&&(
         <div className="mobile-only" style={{position:"fixed",top:50,left:0,right:0,bottom:54,background:BG,zIndex:100,flexDirection:"column",overflow:"hidden"}}>
           <div style={{padding:"12px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE,flexShrink:0}}>
-            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>Venue</span>
+            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>🧾 Current Bill</span>
             <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
           </div>
-          <div style={{flex:1,overflowY:"auto",padding:16,WebkitOverflowScrolling:"touch"}}>
-            <div style={{textAlign:"center",padding:"16px 0 20px"}}>
-              <img src={LOGO_SRC} alt="EasyCart" style={{width:64,height:64,objectFit:"contain",background:"#fff",borderRadius:14,padding:5,marginBottom:10}}/>
-              <div style={{fontSize:16,fontWeight:700,color:"#e8e0d0"}}>EasyCart</div>
-              <div style={{fontSize:13,color:"#555"}}>Barcade & Lounge</div>
-              <div style={{fontSize:12,color:"#333",marginTop:3}}>{VENUE_LOCATION}</div>
-            </div>
-            <button onClick={()=>{setShowMenu(true);setMobileTab("chat");}} style={{width:"100%",padding:"13px 0",background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:12,color:"#080808",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"Inter,sans-serif",marginBottom:20}}>🍽️ View Full Menu</button>
-            <div style={{height:1,background:BORDER,marginBottom:16}}/>
-            <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>TONIGHT'S HIGHLIGHTS</div>
-            {announcements.map((a,i)=>(
-              <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"11px 13px",marginBottom:8,fontSize:13,lineHeight:1.6,color:"#ccc"}}>{a}</div>
-            ))}
-            <div style={{fontSize:11,color:"#444",letterSpacing:1,margin:"16px 0 10px"}}>VENUE INFO</div>
-            <div style={{fontSize:13,color:"#555",lineHeight:2.2}}>
-              <div>📍 {VENUE_LOCATION}</div>
-              <div>🔒 Wi-Fi secured chat</div>
-              <div>🍸 Hidden Bar inside</div>
-            </div>
+          <BillTab/>
+        </div>
+      )}
+
+      {/* More Tab (Guests + Venue) */}
+      {mobileTab==="more"&&(
+        <div className="mobile-only" style={{position:"fixed",top:50,left:0,right:0,bottom:54,background:BG,zIndex:100,flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE,flexShrink:0}}>
+            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>••• More</span>
+            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
           </div>
+          <MoreTab
+            me={me}
+            users={visibleUsers}
+            announcements={announcements}
+            blockedIds={blockedIds}
+            setPmTarget={setPmTarget}
+            markDMRead={markDMRead}
+            unreadDMs={unreadDMs}
+            setShowMenu={setShowMenu}
+            setMobileTab={setMobileTab}
+          />
         </div>
       )}
 
@@ -1281,7 +1352,8 @@ function ChatRoom({me,onLeave,showToast,notifications}){
       {showProfile&&<ProfileCard user={showProfile} me={me} onClose={()=>setShowProfile(null)} onDM={()=>{setPmTarget(showProfile);setShowProfile(null);}} onBlock={()=>blockUser(showProfile.id)} onReport={reportUser}/>}
       {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>{setPmTarget(null);}} notifications={{playSound,pushNotif,markDMRead}}/>}
       {selectedImg&&<ImageModal src={selectedImg} onClose={()=>setSelectedImg(null)}/>}
-      {showMenu&&<MenuModal onClose={()=>setShowMenu(false)}/>}
+      {showMenu&&<MenuModal onClose={()=>setShowMenu(false)} hasTable={hasTable}/>}
+      <ReceiptDisplay/>
 
       {/* In-app DM notification popups */}
       <div style={{position:"fixed",top:60,right:12,zIndex:9998,display:"flex",flexDirection:"column",gap:8,maxWidth:260,pointerEvents:"none"}}>
@@ -1302,13 +1374,412 @@ function ChatRoom({me,onLeave,showToast,notifications}){
   );
 }
 
+
+// ── Cart Context (global cart state) ─────────────────────────────────────────
+const CartContext = React.createContext(null);
+
+function useCart(){
+  return React.useContext(CartContext);
+}
+
+function CartProvider({children, tableId}){
+  const [cartItems, setCartItems] = React.useState([]);
+  const [orderHistory, setOrderHistory] = React.useState([]);
+  const [tab, setTab] = React.useState(null);
+  const [showReceipt, setShowReceipt] = React.useState(null);
+
+  // Load existing tab and orders on mount
+  React.useEffect(()=>{
+    if(!tableId) return;
+    const init = async()=>{
+      const t = await getOrCreateTab(tableId);
+      setTab(t);
+      // Load existing order items for this tab
+      const {data} = await supabase
+        .from("order_items")
+        .select("*, orders(user_name,created_at,status,id)")
+        .eq("tab_id", t.id)
+        .eq("voided", false)
+        .order("created_at", {ascending:true});
+      if(data) setOrderHistory(data);
+    };
+    init();
+  },[tableId]);
+
+  // Realtime: listen for new order items on this tab
+  React.useEffect(()=>{
+    if(!tab) return;
+    const ch = supabase.channel(`tab-items-${tab.id}`)
+      .on("postgres_changes",{event:"INSERT",schema:"public",table:"order_items",filter:`tab_id=eq.${tab.id}`},
+        async payload=>{
+          const item = payload.new;
+          // Fetch order info
+          const {data:ord} = await supabase.from("orders").select("user_name,created_at,status,id").eq("id",item.order_id).single();
+          setOrderHistory(p=>[...p,{...item,orders:ord}]);
+        })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"order_items",filter:`tab_id=eq.${tab.id}`},
+        payload=>{
+          setOrderHistory(p=>p.map(i=>i.id===payload.new.id?{...i,...payload.new}:i));
+        })
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"table_tabs",filter:`id=eq.${tab.id}`},
+        payload=>setTab(p=>({...p,...payload.new})))
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[tab?.id]);
+
+  const addToCart = (item, categoryType)=>{
+    setCartItems(prev=>{
+      const existing = prev.find(c=>c.menu_item_id===item.id);
+      if(existing) return prev.map(c=>c.menu_item_id===item.id?{...c,quantity:c.quantity+1}:c);
+      return [...prev,{
+        menu_item_id: item.id,
+        item_name: item.name,
+        item_price: Number(item.price),
+        category_type: categoryType,
+        quantity: 1,
+      }];
+    });
+  };
+
+  const removeFromCart = (menuItemId)=>{
+    setCartItems(p=>p.filter(c=>c.menu_item_id!==menuItemId));
+  };
+
+  const updateQty = (menuItemId, qty)=>{
+    if(qty<=0){removeFromCart(menuItemId);return;}
+    setCartItems(p=>p.map(c=>c.menu_item_id===menuItemId?{...c,quantity:qty}:c));
+  };
+
+  const clearCart = ()=>setCartItems([]);
+
+  const confirmOrder = async(me, note="")=>{
+    if(!cartItems.length||!tab||!me) return {success:false,error:"Nothing in cart"};
+    // Idempotency check — prevent double submit
+    const key = `order_${tab.id}_${Date.now()}`;
+    try{
+      // Create order
+      const {data:order,error:oe} = await supabase.from("orders").insert({
+        tab_id: tab.id,
+        table_id: tableId,
+        user_id: me.id,
+        user_name: me.name,
+        status: "pending",
+        note: note||null,
+      }).select().single();
+      if(oe) throw oe;
+
+      // Create order items
+      const items = cartItems.map(c=>({
+        order_id: order.id,
+        tab_id: tab.id,
+        table_id: tableId,
+        menu_item_id: c.menu_item_id,
+        item_name: c.item_name,
+        item_price: c.item_price,
+        category_type: c.category_type,
+        quantity: c.quantity,
+        subtotal: c.item_price * c.quantity,
+        status: "pending",
+        voided: false,
+      }));
+      const {error:ie} = await supabase.from("order_items").insert(items);
+      if(ie) throw ie;
+
+      // Update tab total
+      const addedTotal = items.reduce((s,i)=>s+i.subtotal,0);
+      await supabase.from("table_tabs").update({total: (Number(tab.total)||0)+addedTotal}).eq("id",tab.id);
+
+      setShowReceipt({order, items: cartItems, total: addedTotal});
+      clearCart();
+      return {success:true, order};
+    }catch(e){
+      return {success:false, error:e.message};
+    }
+  };
+
+  const requestBill = async()=>{
+    if(!tab) return;
+    await supabase.from("table_tabs").update({
+      status:"bill_requested",
+      bill_requested_at: new Date().toISOString()
+    }).eq("id",tab.id);
+  };
+
+  const cartTotal = cartItems.reduce((s,i)=>s+(i.item_price*i.quantity),0);
+  const cartCount = cartItems.reduce((s,i)=>s+i.quantity,0);
+  const billTotal = orderHistory.filter(i=>!i.voided).reduce((s,i)=>s+Number(i.subtotal),0);
+
+  return(
+    <CartContext.Provider value={{
+      cartItems, addToCart, removeFromCart, updateQty, clearCart,
+      confirmOrder, requestBill,
+      cartTotal, cartCount, billTotal,
+      orderHistory, tab, showReceipt, setShowReceipt,
+    }}>
+      {children}
+    </CartContext.Provider>
+  );
+}
+
+// ── Receipt Popup ─────────────────────────────────────────────────────────────
+function ReceiptPopup({receipt, onClose}){
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div className="glass slide-up" style={{width:"100%",maxWidth:380,borderRadius:20,overflow:"hidden"}}>
+        <div style={{background:`linear-gradient(135deg,${GOLD_DIM}33,${GOLD}11)`,padding:"20px 20px 16px",textAlign:"center",borderBottom:`1px solid ${BORDER}`}}>
+          <div style={{fontSize:36,marginBottom:6}}>🎉</div>
+          <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:900}} className="gold-text">Order Confirmed!</div>
+          <div style={{fontSize:12,color:"#666",marginTop:4}}>Your order has been sent to the kitchen/bar</div>
+        </div>
+        <div style={{padding:"14px 20px",maxHeight:260,overflowY:"auto"}}>
+          {receipt.items.map((item,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 0",borderBottom:`1px solid ${BORDER}`}}>
+              <div>
+                <div style={{fontSize:13,color:"#e8e0d0"}}>{item.item_name}</div>
+                <div style={{fontSize:11,color:"#555"}}>x{item.quantity} × {fmtPrice(item.item_price)}</div>
+              </div>
+              <div style={{fontSize:13,fontWeight:600,color:GOLD}}>{fmtPrice(item.item_price*item.quantity)}</div>
+            </div>
+          ))}
+          <div style={{display:"flex",justifyContent:"space-between",padding:"12px 0 4px",borderTop:`1px solid ${GOLD_DIM}44`,marginTop:4}}>
+            <span style={{fontWeight:700,color:"#e8e0d0"}}>Order Total</span>
+            <span style={{fontWeight:700,color:GOLD,fontSize:16}}>{fmtPrice(receipt.total)}</span>
+          </div>
+          {receipt.order.note&&<div style={{fontSize:11,color:"#555",marginTop:4}}>📝 Note: {receipt.order.note}</div>}
+        </div>
+        <div style={{padding:"12px 20px",borderTop:`1px solid ${BORDER}`}}>
+          <button className="btn-gold" onClick={onClose} style={{width:"100%",padding:12,fontSize:14,borderRadius:10}}>
+            Done ✦
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Cart Tab ──────────────────────────────────────────────────────────────────
+function CartTab({me}){
+  const {cartItems,removeFromCart,updateQty,confirmOrder,cartTotal,cartCount,tab} = useCart();
+  const [note,setNote] = useState("");
+  const [loading,setLoading] = useState(false);
+  const [error,setError] = useState("");
+
+  const handleConfirm = async()=>{
+    if(!cartItems.length) return;
+    setLoading(true);setError("");
+    const result = await confirmOrder(me, note);
+    if(!result.success) setError(result.error||"Failed. Try again.");
+    setLoading(false);
+    setNote("");
+  };
+
+  if(!cartItems.length) return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center"}}>
+      <div style={{fontSize:48,marginBottom:12}}>🛒</div>
+      <div style={{fontFamily:"'Playfair Display',serif",fontSize:18,color:"#555",marginBottom:8}}>Your cart is empty</div>
+      <div style={{fontSize:13,color:"#333"}}>Browse the menu and add items to get started</div>
+    </div>
+  );
+
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{flex:1,overflowY:"auto",padding:"12px 14px",WebkitOverflowScrolling:"touch"}}>
+        <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:12}}>YOUR ORDER · {cartCount} ITEMS</div>
+        {cartItems.map(item=>(
+          <div key={item.menu_item_id} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:"12px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:10}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:500,color:"#e8e0d0"}}>{item.item_name}</div>
+              <div style={{fontSize:12,color:GOLD,marginTop:2}}>{fmtPrice(item.item_price)} each</div>
+            </div>
+            {/* Qty controls */}
+            <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+              <button onClick={()=>updateQty(item.menu_item_id,item.quantity-1)} style={{width:28,height:28,borderRadius:"50%",background:SURFACE2,border:`1px solid ${BORDER}`,color:"#e8e0d0",cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>−</button>
+              <span style={{fontSize:14,fontWeight:600,color:"#e8e0d0",minWidth:20,textAlign:"center"}}>{item.quantity}</span>
+              <button onClick={()=>updateQty(item.menu_item_id,item.quantity+1)} style={{width:28,height:28,borderRadius:"50%",background:SURFACE2,border:`1px solid ${BORDER}`,color:"#e8e0d0",cursor:"pointer",fontSize:16,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>+</button>
+            </div>
+            <div style={{fontSize:13,fontWeight:700,color:GOLD,minWidth:60,textAlign:"right",flexShrink:0}}>{fmtPrice(item.item_price*item.quantity)}</div>
+            <button onClick={()=>removeFromCart(item.menu_item_id)} style={{background:"none",border:"none",color:"#F87171",cursor:"pointer",fontSize:18,flexShrink:0,fontFamily:"Inter,sans-serif",lineHeight:1,padding:2}}>×</button>
+          </div>
+        ))}
+        <div style={{marginTop:8}}>
+          <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>SPECIAL INSTRUCTIONS (OPTIONAL)</label>
+          <textarea value={note} onChange={e=>setNote(e.target.value)} placeholder="e.g. Less ice, extra spicy…" rows={2} style={{width:"100%",padding:"9px 12px",fontSize:13,resize:"none",borderRadius:8,lineHeight:1.5}}/>
+        </div>
+      </div>
+      {/* Footer */}
+      <div style={{padding:"12px 14px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:12}}>
+          <span style={{fontSize:14,color:"#888"}}>Total</span>
+          <span style={{fontSize:18,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(cartTotal)}</span>
+        </div>
+        {error&&<div style={{fontSize:12,color:"#F87171",marginBottom:8,textAlign:"center"}}>{error}</div>}
+        <button className="btn-gold" onClick={handleConfirm} disabled={loading} style={{width:"100%",padding:13,fontSize:15,borderRadius:10,opacity:loading?.7:1}}>
+          {loading?"Placing Order…":"Confirm Order ✦"}
+        </button>
+        {tab?.status==="bill_requested"&&(
+          <div style={{marginTop:8,textAlign:"center",fontSize:12,color:"#F59E0B"}}>⏳ Bill has been requested</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Bill Tab ──────────────────────────────────────────────────────────────────
+function BillTab(){
+  const {orderHistory,billTotal,requestBill,tab} = useCart();
+
+  const STATUS_COLOR = {
+    pending:"#F59E0B",
+    preparing:"#60A5FA",
+    ready:"#34D399",
+    served:"#888",
+    voided:"#F87171",
+  };
+  const STATUS_LABEL = {
+    pending:"⏳ Pending",
+    preparing:"👨‍🍳 Preparing",
+    ready:"✅ Ready",
+    served:"🍽️ Served",
+    voided:"❌ Voided",
+  };
+
+  // Group by order
+  const byOrder = orderHistory.reduce((acc,item)=>{
+    const oid = item.order_id;
+    if(!acc[oid]) acc[oid]={
+      id:oid,
+      user_name:item.orders?.user_name||"Guest",
+      created_at:item.orders?.created_at,
+      items:[],
+    };
+    acc[oid].items.push(item);
+    return acc;
+  },{});
+
+  const orders = Object.values(byOrder).sort((a,b)=>new Date(a.created_at)-new Date(b.created_at));
+  const activeItems = orderHistory.filter(i=>!i.voided);
+  const billRequested = tab?.status==="bill_requested";
+
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{flex:1,overflowY:"auto",padding:"12px 14px",WebkitOverflowScrolling:"touch"}}>
+        {orders.length===0?(
+          <div style={{textAlign:"center",padding:40,color:"#444"}}>
+            <div style={{fontSize:40,marginBottom:10}}>🧾</div>
+            <div style={{fontSize:14}}>No orders yet</div>
+          </div>
+        ):orders.map(order=>(
+          <div key={order.id} style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+              <span style={{fontSize:11,color:GOLD,fontWeight:600}}>{order.user_name}</span>
+              <span style={{fontSize:10,color:"#333"}}>{order.created_at?fmtTime(order.created_at):""}</span>
+            </div>
+            {order.items.map(item=>(
+              <div key={item.id} style={{background:item.voided?`rgba(248,113,113,0.06)`:SURFACE,border:`1px solid ${item.voided?"rgba(248,113,113,0.2)":BORDER}`,borderRadius:10,padding:"9px 12px",marginBottom:5,display:"flex",alignItems:"center",gap:8,opacity:item.voided?.6:1}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,color:item.voided?"#666":"#e8e0d0",textDecoration:item.voided?"line-through":"none"}}>{item.item_name} ×{item.quantity}</div>
+                  <div style={{fontSize:10,color:STATUS_COLOR[item.status]||"#555",marginTop:1}}>{STATUS_LABEL[item.status]||item.status}</div>
+                </div>
+                <div style={{fontSize:13,fontWeight:600,color:item.voided?"#555":GOLD,flexShrink:0}}>{fmtPrice(item.subtotal)}</div>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      {/* Bill footer */}
+      <div style={{padding:"12px 14px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",marginBottom:14}}>
+          <span style={{fontSize:15,fontWeight:600,color:"#e8e0d0"}}>Total Bill</span>
+          <span style={{fontSize:20,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(billTotal)}</span>
+        </div>
+        {billRequested?(
+          <div style={{textAlign:"center",padding:"12px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:12}}>
+            <div style={{fontSize:14,color:"#F59E0B",fontWeight:600}}>⏳ Bill Requested</div>
+            <div style={{fontSize:12,color:"#666",marginTop:3}}>Staff will be with you shortly</div>
+          </div>
+        ):(
+          <button onClick={requestBill} style={{width:"100%",padding:13,fontSize:15,background:`linear-gradient(135deg,${GOLD_DIM},${GOLD})`,border:"none",borderRadius:10,color:"#080808",fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+            🧾 Request Bill
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── More Tab (Guests + Venue) ─────────────────────────────────────────────────
+function MoreTab({me, users, announcements, blockedIds, setPmTarget, markDMRead, unreadDMs, setShowMenu, setMobileTab}){
+  const [subTab, setSubTab] = useState("guests");
+  const visibleUsers = users.filter(u=>!blockedIds.includes(u.id));
+
+  return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,flexShrink:0}}>
+        {[["guests","👥 Guests"],["venue","✦ Venue"]].map(([v,l])=>(
+          <button key={v} className={`tab-btn ${subTab===v?"active":""}`} onClick={()=>setSubTab(v)} style={{fontSize:13,padding:"10px 8px"}}>{l}</button>
+        ))}
+      </div>
+      {subTab==="guests"&&(
+        <div style={{flex:1,overflowY:"auto",padding:12,WebkitOverflowScrolling:"touch"}}>
+          <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:10}}>ONLINE · {visibleUsers.length}</div>
+          {visibleUsers.map(u=>(
+            <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}}
+              onClick={()=>{if(u.id!==me.id){setPmTarget(u);markDMRead(u.id);setMobileTab("chat");}}}>
+              <div style={{position:"relative",flexShrink:0}}>
+                <Avatar user={u} size={36}/>
+                {unreadDMs[u.id]&&<div className="notif-dot"/>}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:500,color:u.id===me.id?GOLD:"#ccc"}}>{u.id===me.id?"You":u.name}</div>
+                <div style={{fontSize:11,color:"#34D399",marginTop:1}}>{u.status||"online"}</div>
+              </div>
+              {u.id!==me.id&&<span style={{fontSize:12,color:GOLD_DIM,background:`rgba(201,168,76,0.08)`,padding:"4px 10px",borderRadius:8,border:`1px solid ${GOLD_DIM}44`,flexShrink:0}}>DM</span>}
+            </div>
+          ))}
+        </div>
+      )}
+      {subTab==="venue"&&(
+        <div style={{flex:1,overflowY:"auto",padding:16,WebkitOverflowScrolling:"touch"}}>
+          <div style={{textAlign:"center",padding:"16px 0 20px"}}>
+            <img src={LOGO_SRC} alt="EasyCart" style={{width:64,height:64,objectFit:"contain",background:"#fff",borderRadius:14,padding:5,marginBottom:10}}/>
+            <div style={{fontSize:16,fontWeight:700,color:"#e8e0d0"}}>EasyCart</div>
+            <div style={{fontSize:13,color:"#555"}}>Barcade & Lounge</div>
+            <div style={{fontSize:12,color:"#333",marginTop:3}}>{VENUE_LOCATION}</div>
+          </div>
+          <button onClick={()=>{setShowMenu(true);setMobileTab("chat");}} style={{width:"100%",padding:"13px 0",background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:12,color:"#080808",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"Inter,sans-serif",marginBottom:20}}>🍽️ View Full Menu</button>
+          <div style={{height:1,background:BORDER,marginBottom:16}}/>
+          <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>TONIGHT</div>
+          {announcements.map((a,i)=>(
+            <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"11px 13px",marginBottom:8,fontSize:13,lineHeight:1.6,color:"#ccc"}}>{a}</div>
+          ))}
+          <div style={{fontSize:11,color:"#444",letterSpacing:1,margin:"16px 0 10px"}}>INFO</div>
+          <div style={{fontSize:13,color:"#555",lineHeight:2.2}}>
+            <div>📍 {VENUE_LOCATION}</div>
+            <div>🔒 Wi-Fi secured chat</div>
+            <div>🍸 Hidden Bar inside</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Guest Menu Modal ─────────────────────────────────────────────────────────
-function MenuModal({onClose}){
+function MenuModal({onClose, hasTable=false}){
   const [categories,setCategories]=useState([]);
   const [items,setItems]=useState([]);
   const [loading,setLoading]=useState(true);
   const [menuTab,setMenuTab]=useState("food");
   const [activeCat,setActiveCat]=useState(null);
+  const [addedMsg,setAddedMsg]=useState("");
+  const cart = hasTable ? useCart() : null;
+
+  const handleAddToCart = (item, categoryType)=>{
+    if(!cart) return;
+    cart.addToCart(item, categoryType);
+    setAddedMsg(item.name);
+    setTimeout(()=>setAddedMsg(""),1800);
+  };
 
   useEffect(()=>{
     const load=async()=>{
@@ -1348,6 +1819,11 @@ function MenuModal({onClose}){
             </div>
             <button onClick={onClose} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:"50%",width:34,height:34,cursor:"pointer",color:"#888",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif",flexShrink:0}}>×</button>
           </div>
+          {addedMsg&&(
+            <div className="fade-in" style={{background:`rgba(201,168,76,0.12)`,border:`1px solid ${GOLD_DIM}`,borderRadius:8,padding:"6px 12px",marginBottom:8,fontSize:12,color:GOLD,textAlign:"center"}}>
+              ✦ {addedMsg} added to cart
+            </div>
+          )}
           {/* Main tabs */}
           <div style={{display:"flex",gap:6,marginBottom:12}}>
             {tabs.map(t=>(
@@ -1378,17 +1854,25 @@ function MenuModal({onClose}){
           <div style={{flex:1,overflowY:"auto",padding:"10px 12px",WebkitOverflowScrolling:"touch"}}>
             {loading?[1,2,3,4,5].map(i=><div key={i} className="skel" style={{height:48,marginBottom:8,borderRadius:10}}/>):
             activeItems.length===0?<div style={{color:"#444",textAlign:"center",padding:40,fontSize:13}}>No items in this category</div>:
-            activeItems.map((item,idx)=>(
-              <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 12px",marginBottom:6,background:idx%2===0?SURFACE:SURFACE2,borderRadius:10,border:`1px solid ${BORDER}`}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:500,color:"#e8e0d0"}}>{item.name}</div>
-                  {item.description&&<div style={{fontSize:10,color:"#555",marginTop:1,lineHeight:1.4}}>{item.description}</div>}
+            activeItems.map((item,idx)=>{
+              const catType = categories.find(c=>c.id===activeCat)?.type||"food";
+              const inCart = cart?.cartItems?.find(c=>c.menu_item_id===item.id);
+              return(
+                <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",padding:"10px 12px",marginBottom:6,background:idx%2===0?SURFACE:SURFACE2,borderRadius:10,border:`1px solid ${BORDER}`,gap:8}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,color:"#e8e0d0"}}>{item.name}</div>
+                    {item.description&&<div style={{fontSize:10,color:"#555",marginTop:1,lineHeight:1.4}}>{item.description}</div>}
+                    <div style={{fontSize:13,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif",marginTop:3}}>₱{Number(item.price).toLocaleString()}</div>
+                  </div>
+                  {hasTable&&(
+                    <button onClick={()=>handleAddToCart(item,catType)}
+                      style={{flexShrink:0,padding:"7px 12px",background:inCart?`rgba(201,168,76,0.15)`:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:inCart?`1px solid ${GOLD_DIM}`:"none",borderRadius:8,color:inCart?"#C9A84C":"#080808",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif",transition:"all .2s",whiteSpace:"nowrap"}}>
+                      {inCart?`+${inCart.quantity} ✓`:"+ Add"}
+                    </button>
+                  )}
                 </div>
-                <div style={{flexShrink:0,marginLeft:10}}>
-                  <div style={{fontSize:14,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>₱{Number(item.price).toLocaleString()}</div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -2108,7 +2592,8 @@ export default function App(){
   const [me,setMe]=useState(null);
   const [wifiOk,setWifiOk]=useState(true);
   const [adminAuthed,setAdminAuthed]=useState(false);
-  const [removedReason,setRemovedReason]=useState(null); // "kicked" | "blocked"
+  const [removedReason,setRemovedReason]=useState(null);
+  const [tableId]=useState(()=>getTableFromURL()); // read once from URL
   const {toasts,show:showToast}=useToast();
   const notifications=useNotifications(me);
 
@@ -2161,23 +2646,25 @@ export default function App(){
     <>
       <style>{CSS}</style>
       {screen==="loading"&&<Loading label="CONNECTING…" sub={`Checking ${VENUE_WIFI}`}/>}
-      {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo}/>}
-      {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");showToast(`Welcome, ${user.name}! You're in 👑`);}} wifiOk={wifiOk}/>}
-      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={(reason)=>{
-        setMe(null);
-        if(reason==="kicked"||reason==="blocked"){
-          // Clear session — they can't auto-login if blocked/kicked
-          clearSession();
-          setRemovedReason(reason);
-          setScreen("removed");
-        } else if(reason==="manual"){
-          // Manual leave — clear session so they re-register next visit
-          clearSession();
-          setScreen("landing");
-        } else {
-          setScreen("landing");
-        }
-      }} showToast={showToast} notifications={notifications}/>}
+      {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo} tableId={tableId}/>}
+      {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");}} wifiOk={wifiOk} tableId={tableId}/>}
+      {screen==="chat"&&me&&(
+        <CartProvider tableId={tableId}>
+          <ChatRoom me={me} tableId={tableId} onLeave={(reason)=>{
+            setMe(null);
+            if(reason==="kicked"||reason==="blocked"){
+              clearSession();
+              setRemovedReason(reason);
+              setScreen("removed");
+            } else if(reason==="manual"){
+              clearSession();
+              setScreen("landing");
+            } else {
+              setScreen("landing");
+            }
+          }} showToast={showToast} notifications={notifications}/>
+        </CartProvider>
+      )}
       {screen==="admin"&&(
         adminAuthed
           ?<AdminPanel onLogout={()=>{setAdminAuthed(false);setScreen("landing");}}/>
