@@ -38,6 +38,63 @@ const filterMsg = (t,extraWords=[]) => {
   const all=[...PROFANITY,...extraWords];
   return all.reduce((s,w)=>s.replace(new RegExp("\\b"+w+"\\b","gi"),"***"),t);
 };
+// ── Device fingerprint + session ─────────────────────────────────────────────
+const SESSION_KEY = "ezchat_session_v1";
+
+function getDeviceFingerprint(){
+  const nav = window.navigator;
+  const screen = window.screen;
+  const raw = [
+    nav.userAgent,
+    nav.language,
+    nav.hardwareConcurrency||"",
+    screen.width+"x"+screen.height,
+    screen.colorDepth||"",
+    Intl.DateTimeFormat().resolvedOptions().timeZone||"",
+    nav.platform||"",
+  ].join("|");
+  // Simple hash
+  let hash = 0;
+  for(let i=0;i<raw.length;i++){hash=(hash<<5)-hash+raw.charCodeAt(i);hash|=0;}
+  return Math.abs(hash).toString(36);
+}
+
+function saveSession(user){
+  try{
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      userId: user.id,
+      fingerprint: getDeviceFingerprint(),
+      savedAt: new Date().toISOString(),
+    }));
+  }catch(e){}
+}
+
+function clearSession(){
+  try{localStorage.removeItem(SESSION_KEY);}catch(e){}
+}
+
+async function loadSession(){
+  try{
+    const raw = localStorage.getItem(SESSION_KEY);
+    if(!raw) return null;
+    const session = JSON.parse(raw);
+    // Verify fingerprint matches this device
+    if(session.fingerprint !== getDeviceFingerprint()) return null;
+    // Check if user still exists in Supabase
+    const {data} = await supabase.from("users").select("*").eq("id", session.userId).single();
+    if(!data || data.status === "blocked") {
+      clearSession();
+      return null;
+    }
+    // Update status to online
+    await supabase.from("users").update({status:"online", last_seen: new Date().toISOString()}).eq("id", session.userId);
+    return data;
+  }catch(e){
+    clearSession();
+    return null;
+  }
+}
+
 const EMOJIS = ["😄","😂","😍","🔥","👑","🎉","💛","✨","🥂","🎶","😎","🙌","💫","🤩","🍾","🎮","🎯","🎱"];
 const COLORS = ["#C9A84C","#E8C96A","#A78BFA","#34D399","#F87171","#60A5FA","#FB923C","#E879F9"];
 const fmtTime = (d) => new Date(d).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
@@ -91,11 +148,17 @@ input::placeholder,textarea::placeholder{color:#3a3a3a}
 .mobile-only{display:none}
 .desktop-only{display:flex}
 @media(max-width:768px){
-  .mobile-only{display:flex}
+  .mobile-only{display:flex!important}
   .desktop-sidebar{display:none!important}
   .desktop-only{display:none!important}
-  .mobile-chat-area{min-width:0!important;width:100%!important}
 }
+/* Prevent iOS bounce scroll on the app container */
+@supports(-webkit-touch-callout:none){
+  body{position:fixed;width:100%;height:100%;}
+  #root{overflow:hidden;height:100%;}
+}
+/* Safe area for iPhone notch/home bar */
+.safe-bottom{padding-bottom:env(safe-area-inset-bottom,0px)}
 .notif-dot{position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;background:#F87171;border:2px solid #0F0F0F;animation:pulse 1.5s infinite}
 .unread-badge{background:#F87171;color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;min-width:18px;text-align:center}
 @keyframes notifSlide{from{opacity:0;transform:translateX(100%)}to{opacity:1;transform:translateX(0)}}
@@ -436,6 +499,8 @@ function Entry({onEnter,wifiOk}){
         text:`${nickname.trim()} joined the chat ${genderInfo?.emoji||"👋"}`,
         type:"system"
       });
+      // Save session to localStorage + fingerprint
+      saveSession(data);
       onEnter(data);
     }catch(e){
       setError("Connection error. Check your Wi-Fi and try again.");
@@ -847,9 +912,14 @@ function ChatRoom({me,onLeave,showToast,notifications}){
   // ── Heartbeat — keep user online ──
   useEffect(()=>{
     const beat=async()=>{
-      // Only heartbeat if not blocked/kicked
-      const {data}=await supabase.from("users").select("status").eq("id",me.id).single();
-      if(data&&(data.status==="blocked"||data.status==="kicked"))return;
+      const {data,error}=await supabase.from("users").select("status").eq("id",me.id).single();
+      // If user no longer exists (wiped by 1PM cleanup), clear session and go to landing
+      if(error||!data){
+        clearSession();
+        onLeave("landing");
+        return;
+      }
+      if(data.status==="blocked"||data.status==="kicked")return;
       await supabase.from("users").update({last_seen:new Date().toISOString(),status:"online"}).eq("id",me.id);
     };
     beat();
@@ -938,49 +1008,45 @@ function ChatRoom({me,onLeave,showToast,notifications}){
   const visibleMsgs=messages.filter(m=>!blockedIds.includes(m.user_id));
 
   return(
-    <div style={{height:"100dvh",display:"flex",flexDirection:"column",background:BG,overflow:"hidden"}} onClick={()=>showEmoji&&setShowEmoji(false)}>
-      {/* Top bar */}
-      <div style={{padding:"0 14px",height:54,display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
-        <Logo size={30} showText={true}/>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"5px 12px",fontSize:12,color:GOLD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} className="ann-bar">
+    <div style={{height:"100dvh",display:"flex",flexDirection:"column",background:BG,overflow:"hidden",position:"fixed",inset:0}} onClick={()=>showEmoji&&setShowEmoji(false)}>
+
+      {/* ── TOP BAR ─────────────────────────────────────────── */}
+      <div style={{height:50,minHeight:50,padding:"0 10px",display:"flex",alignItems:"center",gap:6,borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,zIndex:10}}>
+        <Logo size={24} showText={false}/>
+        {/* Announcement + online row */}
+        <div style={{flex:1,minWidth:0,overflow:"hidden"}}>
+          <div style={{fontSize:11,color:GOLD,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} className="ann-bar">
             📢 {announcements[annIdx]}
           </div>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
-          <div style={{display:"flex",alignItems:"center",gap:5}}>
-            <div className="online-dot"/>
-            <span style={{fontSize:11,color:"#555",whiteSpace:"nowrap"}}>{visibleUsers.length} online</span>
-          </div>
-          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:4,marginTop:1}}>
+            <div style={{width:6,height:6,borderRadius:"50%",background:"#34D399",flexShrink:0}}/>
+            <span style={{fontSize:10,color:"#555"}}>{visibleUsers.length}</span>
             {[
-              {label:"male",   emoji:"👨", test:u=>u.gender==="male"},
-              {label:"female", emoji:"👩", test:u=>u.gender==="female"},
-              {label:"lgbtq",  emoji:"🏳️‍🌈", test:u=>["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)},
-              {label:"prefer", emoji:"🤐", test:u=>u.gender==="prefer_not"},
+              {l:"male",e:"👨",t:u=>u.gender==="male"},
+              {l:"female",e:"👩",t:u=>u.gender==="female"},
+              {l:"lgbtq",e:"🏳️‍🌈",t:u=>["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)},
+              {l:"prefer",e:"🤐",t:u=>u.gender==="prefer_not"},
             ].map(g=>{
-              const count=visibleUsers.filter(g.test).length;
-              if(count===0)return null;
-              return(
-                <div key={g.label} title={g.label==="lgbtq"?"LGBTQ+":g.label} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"2px 7px",fontSize:11,display:"flex",alignItems:"center",gap:3}}>
-                  <span>{g.emoji}</span><span style={{color:"#888"}}>{count}</span>
-                </div>
-              );
+              const c=visibleUsers.filter(g.t).length;
+              return c>0?<span key={g.l} style={{fontSize:10,color:"#555"}}>{g.e}{c}</span>:null;
             })}
           </div>
         </div>
-        <button onClick={()=>setSoundOn(s=>!s)} title={soundOn?"Mute sounds":"Unmute sounds"} style={{background:"none",border:"none",cursor:"pointer",fontSize:16,flexShrink:0,opacity:soundOn?1:0.4}}>{soundOn?"🔔":"🔕"}</button>
-        <button onClick={()=>setShowMenu(true)} style={{background:`linear-gradient(135deg,${GOLD_DIM}44,${GOLD_DIM}22)`,border:`1px solid ${GOLD_DIM}`,borderRadius:8,padding:"5px 10px",cursor:"pointer",fontSize:12,color:GOLD,fontFamily:"Inter,sans-serif",fontWeight:600,flexShrink:0,whiteSpace:"nowrap"}}>🍽️ Menu</button>
-        <Avatar user={me} size={28}/>
-        <button className="btn-ghost" onClick={onLeave} style={{padding:"5px 11px",fontSize:11,flexShrink:0}}>Leave</button>
+        {/* Action buttons */}
+        <button onClick={()=>setShowMenu(true)} style={{background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:11,color:"#080808",fontFamily:"Inter,sans-serif",fontWeight:700,flexShrink:0}}>🍽️</button>
+        <button onClick={()=>setSoundOn(s=>!s)} style={{background:"none",border:"none",cursor:"pointer",fontSize:14,flexShrink:0,opacity:soundOn?1:0.35,padding:"2px"}}>{soundOn?"🔔":"🔕"}</button>
+        <Avatar user={me} size={24}/>
+        <button onClick={()=>onLeave("manual")} style={{background:"none",border:`1px solid ${BORDER}`,borderRadius:6,padding:"3px 7px",cursor:"pointer",fontSize:10,color:"#555",fontFamily:"Inter,sans-serif",flexShrink:0}}>✕</button>
       </div>
 
+      {/* ── BODY (flex row — sidebars hidden on mobile) ──────── */}
       <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
-        {/* Left sidebar - hidden on mobile */}
+
+        {/* Left sidebar - desktop only */}
         <div className="desktop-sidebar" style={{width:190,borderRight:`1px solid ${BORDER}`,background:SURFACE,display:"flex",flexDirection:"column",flexShrink:0,overflowY:"auto",padding:"10px 6px"}}>
           <div style={{fontSize:10,color:GOLD,letterSpacing:1,padding:"2px 8px",marginBottom:8}}>ONLINE · {visibleUsers.length}</div>
           {visibleUsers.map(u=>(
-            <div key={u.id} className="sidebar-item" onClick={()=>setShowProfile(u)} style={{display:"flex",alignItems:"center",gap:7,marginBottom:1,position:"relative"}}>
+            <div key={u.id} className="sidebar-item" onClick={()=>setShowProfile(u)} style={{display:"flex",alignItems:"center",gap:7,marginBottom:1}}>
               <div style={{position:"relative",flexShrink:0}}>
                 <Avatar user={u} size={26}/>
                 {unreadDMs[u.id]&&<div className="notif-dot"/>}
@@ -988,62 +1054,58 @@ function ChatRoom({me,onLeave,showToast,notifications}){
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:12,fontWeight:u.id===me.id?600:400,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",color:u.id===me.id?"#C9A84C":"#ccc",display:"flex",alignItems:"center",gap:4}}>
                   <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.name}{u.id===me.id?" ✦":""}</span>
-                  {u.gender&&<span style={{fontSize:11,flexShrink:0}}>{
-                    u.gender==="male"?"👨":
-                    u.gender==="female"?"👩":
-                    u.gender==="prefer_not"?"🤐":
-                    ["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)?"🏳️‍🌈":""
-                  }</span>}
+                  {u.gender&&<span style={{fontSize:11,flexShrink:0}}>{u.gender==="male"?"👨":u.gender==="female"?"👩":["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)?"🏳️‍🌈":u.gender==="prefer_not"?"🤐":""}</span>}
                 </div>
               </div>
               <div className={`online-dot ${u.status==="away"?"away":""}`} style={{width:6,height:6}}/>
             </div>
           ))}
-          <div style={{marginTop:"auto",paddingTop:16,borderTop:`1px solid ${BORDER}`,marginTop:12}}>
+          <div style={{marginTop:"auto",paddingTop:12,borderTop:`1px solid ${BORDER}`}}>
             <div style={{fontSize:10,color:"#2a2a2a",textAlign:"center",lineHeight:1.5,padding:"0 4px"}}>🔒 {VENUE_WIFI}</div>
           </div>
         </div>
 
-        {/* Main chat */}
+        {/* ── MAIN CHAT COLUMN ─────────────────────────────────── */}
         <div style={{flex:1,display:"flex",flexDirection:"column",minWidth:0,overflow:"hidden"}}>
-          <div style={{padding:"8px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",gap:8,flexShrink:0,background:SURFACE}}>
-            <div style={{width:8,height:8,borderRadius:"50%",background:"#34D399"}}/>
-            <span style={{fontSize:13,fontWeight:600,color:"#ccc"}}># lounge-chat</span>
-            <span style={{fontSize:11,color:"#333",marginLeft:4}}>{VENUE_NAME}</span>
+          {/* Channel header */}
+          <div style={{padding:"6px 12px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",gap:6,flexShrink:0,background:SURFACE}}>
+            <div style={{width:7,height:7,borderRadius:"50%",background:"#34D399"}}/>
+            <span style={{fontSize:12,fontWeight:600,color:"#ccc"}}># lounge-chat</span>
+            <span style={{fontSize:10,color:"#333",marginLeft:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{VENUE_NAME}</span>
           </div>
 
-          {/* Messages */}
-          <div style={{flex:1,overflowY:"auto",padding:"14px 14px 6px"}}>
+          {/* Messages — this is the scrollable area */}
+          <div style={{flex:1,overflowY:"auto",overflowX:"hidden",padding:"12px 10px 6px",WebkitOverflowScrolling:"touch"}}>
             {loadingMsgs&&[1,2,3,4].map(i=><MsgSkeleton key={i}/>)}
             {!loadingMsgs&&visibleMsgs.map((m,idx)=>{
               const u=getUserFor(m);
               const isMe=m.user_id===me.id;
               const isSystem=m.type==="system";
               const showAvatar=idx===0||visibleMsgs[idx-1].user_id!==m.user_id;
-              if(isSystem) return(
-                <div key={m.id} className="fade-in" style={{textAlign:"center",fontSize:12,color:"#333",padding:"4px 0 10px"}}>{m.text}</div>
+              if(isSystem)return(
+                <div key={m.id} className="fade-in" style={{textAlign:"center",fontSize:11,color:"#333",padding:"3px 0 8px"}}>{m.text}</div>
               );
               return(
-                <div key={m.id} className="fade-in" style={{display:"flex",gap:9,marginBottom:showAvatar?14:4,flexDirection:isMe?"row-reverse":"row",alignItems:"flex-end"}}>
-                  <div style={{width:32,flexShrink:0}}>
-                    {showAvatar&&<Avatar user={u} size={30} onClick={()=>setShowProfile(u)}/>}
+                <div key={m.id} className="fade-in" style={{display:"flex",gap:7,marginBottom:showAvatar?12:3,flexDirection:isMe?"row-reverse":"row",alignItems:"flex-end"}}>
+                  <div style={{width:28,flexShrink:0}}>
+                    {showAvatar&&<Avatar user={u} size={28} onClick={()=>setShowProfile(u)}/>}
                   </div>
-                  <div style={{maxWidth:"72%"}}>
+                  <div style={{maxWidth:"78%"}}>
                     {showAvatar&&(
-                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexDirection:isMe?"row-reverse":"row"}}>
-                        <span style={{fontSize:12,fontWeight:600,color:isMe?GOLD:u.color}}>{isMe?"You":u.name}</span>
-                        <span style={{fontSize:10,color:"#2a2a2a"}}>{fmtTime(m.created_at)}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:2,flexDirection:isMe?"row-reverse":"row"}}>
+                        <span style={{fontSize:11,fontWeight:600,color:isMe?GOLD:u.color}}>{isMe?"You":u.name}</span>
+                        <span style={{fontSize:9,color:"#2a2a2a"}}>{fmtTime(m.created_at)}</span>
                       </div>
                     )}
                     <div className={`msg-bubble ${isMe?"msg-own":""}`}>
                       {m.type==="image"?(
-                        <img src={m.image_url} alt="shared" style={{maxWidth:200,maxHeight:180,borderRadius:8,cursor:"pointer",display:"block"}} onClick={()=>setSelectedImg(m.image_url)}/>
+                        <img src={m.image_url} alt="shared" style={{maxWidth:180,maxHeight:160,borderRadius:8,cursor:"pointer",display:"block"}} onClick={()=>setSelectedImg(m.image_url)}/>
                       ):(
-                        <span>{m.text}</span>
+                        <span style={{fontSize:14,lineHeight:1.5}}>{m.text}</span>
                       )}
                     </div>
                     {Object.keys(m.reactions||{}).length>0&&(
-                      <div style={{display:"flex",gap:3,marginTop:4,flexWrap:"wrap",justifyContent:isMe?"flex-end":"flex-start"}}>
+                      <div style={{display:"flex",gap:3,marginTop:3,flexWrap:"wrap",justifyContent:isMe?"flex-end":"flex-start"}}>
                         {Object.entries(m.reactions).filter(([,ids])=>ids.length>0).map(([emoji,ids])=>(
                           <button key={emoji} className={`reaction-btn ${ids.includes(me.id)?"active":""}`} onClick={()=>toggleReaction(m.id,emoji)}>
                             {emoji} {ids.length}
@@ -1051,7 +1113,7 @@ function ChatRoom({me,onLeave,showToast,notifications}){
                         ))}
                       </div>
                     )}
-                    <div style={{display:"flex",gap:2,marginTop:3,flexWrap:"wrap",justifyContent:isMe?"flex-end":"flex-start",opacity:0}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>
+                    <div style={{display:"flex",gap:2,marginTop:2,flexWrap:"wrap",justifyContent:isMe?"flex-end":"flex-start",opacity:0}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=0}>
                       {EMOJIS.slice(0,6).map(e=>(
                         <button key={e} onClick={()=>toggleReaction(m.id,e)} style={{background:"none",border:"none",fontSize:12,cursor:"pointer",padding:"1px 2px",lineHeight:1}}>{e}</button>
                       ))}
@@ -1061,30 +1123,30 @@ function ChatRoom({me,onLeave,showToast,notifications}){
               );
             })}
             {typingUsers.filter(u=>!blockedIds.includes(u.id)).length>0&&(
-              <div className="fade-in" style={{display:"flex",alignItems:"center",gap:8,padding:"4px 0 10px 41px"}}>
-                <div style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:12,padding:"7px 12px",display:"flex",gap:4,alignItems:"center"}}>
+              <div className="fade-in" style={{display:"flex",alignItems:"center",gap:7,padding:"3px 0 8px 35px"}}>
+                <div style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"6px 10px",display:"flex",gap:4,alignItems:"center"}}>
                   <div className="typing-dot"/><div className="typing-dot"/><div className="typing-dot"/>
                 </div>
-                <span style={{fontSize:11,color:"#333"}}>{typingUsers.filter(u=>!blockedIds.includes(u.id)).map(u=>u.name).join(", ")} typing…</span>
+                <span style={{fontSize:10,color:"#333"}}>{typingUsers.filter(u=>!blockedIds.includes(u.id)).map(u=>u.name).join(", ")}</span>
               </div>
             )}
             <div ref={endRef}/>
           </div>
 
-          {/* Input */}
-          <div style={{padding:"10px 14px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
-            <div style={{display:"flex",gap:7,alignItems:"flex-end",position:"relative"}}>
+          {/* ── MESSAGE INPUT — always visible, never hidden ───── */}
+          <div style={{padding:"8px 10px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,paddingBottom:"env(safe-area-inset-bottom, 8px)"}}>
+            <div style={{display:"flex",gap:6,alignItems:"flex-end",position:"relative"}}>
               {showEmoji&&<EmojiPicker onSelect={e=>setInput(p=>p+e)} onClose={()=>setShowEmoji(false)}/>}
-              <button onClick={e=>{e.stopPropagation();setShowEmoji(p=>!p);}} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"9px 11px",cursor:"pointer",fontSize:16,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.borderColor=GOLD_DIM} onMouseLeave={e=>e.currentTarget.style.borderColor=BORDER}>😊</button>
-              <button onClick={()=>fileRef.current?.click()} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"9px 11px",cursor:"pointer",fontSize:15,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.borderColor=GOLD_DIM} onMouseLeave={e=>e.currentTarget.style.borderColor=BORDER}>📷</button>
+              <button onClick={e=>{e.stopPropagation();setShowEmoji(p=>!p);}} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 9px",cursor:"pointer",fontSize:16,flexShrink:0}}>😊</button>
+              <button onClick={()=>fileRef.current?.click()} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 9px",cursor:"pointer",fontSize:14,flexShrink:0}}>📷</button>
               <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{sendImage(e.target.files[0]);e.target.value="";}}/>
-              <textarea ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}} placeholder="Message the room… (Enter to send)" rows={1} style={{flex:1,padding:"9px 13px",fontSize:14,resize:"none",lineHeight:1.55,borderRadius:8,maxHeight:90,overflowY:"auto"}}/>
-              <button className="btn-gold" onClick={sendMsg} style={{padding:"9px 16px",fontSize:13,flexShrink:0,borderRadius:8}}>Send</button>
+              <textarea ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}} placeholder="Message the room…" rows={1} style={{flex:1,padding:"8px 11px",fontSize:14,resize:"none",lineHeight:1.5,borderRadius:8,maxHeight:80,overflowY:"auto"}}/>
+              <button className="btn-gold" onClick={sendMsg} style={{padding:"8px 14px",fontSize:13,flexShrink:0,borderRadius:8}}>Send</button>
             </div>
           </div>
         </div>
 
-        {/* Right sidebar - hidden on mobile */}
+        {/* Right sidebar - desktop only */}
         <div className="desktop-sidebar" style={{width:210,borderLeft:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,flexShrink:0}}>
             {[["users","Guests"],["info","Venue"]].map(([v,l])=>(
@@ -1111,88 +1173,101 @@ function ChatRoom({me,onLeave,showToast,notifications}){
               </>
             ):(
               <>
-                <div style={{textAlign:"center",padding:"12px 0 16px"}}>
-                  <img src={LOGO_SRC} alt="EasyCart" style={{width:52,height:52,objectFit:"contain",background:"#fff",borderRadius:10,padding:4,marginBottom:8}}/>
-                  <div style={{fontSize:13,fontWeight:600,color:"#e8e0d0"}}>EasyCart</div>
-                  <div style={{fontSize:11,color:"#555"}}>Barcade & Lounge</div>
-                  <div style={{fontSize:10,color:"#333",marginTop:2}}>{VENUE_LOCATION}</div>
+                <div style={{textAlign:"center",padding:"12px 0 14px"}}>
+                  <img src={LOGO_SRC} alt="EasyCart" style={{width:48,height:48,objectFit:"contain",background:"#fff",borderRadius:10,padding:4,marginBottom:6}}/>
+                  <div style={{fontSize:12,fontWeight:600,color:"#e8e0d0"}}>EasyCart</div>
+                  <div style={{fontSize:10,color:"#555"}}>Barcade & Lounge</div>
+                  <div style={{fontSize:9,color:"#333",marginTop:2}}>{VENUE_LOCATION}</div>
                 </div>
-                <div style={{height:1,background:BORDER,margin:"0 0 14px"}}/>
-                <div style={{fontSize:10,color:"#2a2a2a",marginBottom:9,letterSpacing:1}}>TONIGHT</div>
+                <div style={{height:1,background:BORDER,margin:"0 0 12px"}}/>
+                <div style={{fontSize:10,color:"#2a2a2a",marginBottom:8,letterSpacing:1}}>TONIGHT</div>
                 {announcements.map((a,i)=>(
-                  <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:9,padding:"9px 11px",marginBottom:7,fontSize:12,lineHeight:1.5,color:"#ccc"}}>{a}</div>
+                  <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 10px",marginBottom:6,fontSize:11,lineHeight:1.5,color:"#ccc"}}>{a}</div>
                 ))}
-                <div style={{fontSize:10,color:"#2a2a2a",margin:"14px 0 9px",letterSpacing:1}}>VENUE INFO</div>
-                <div style={{fontSize:11,color:"#444",lineHeight:2}}>
-                  <div>📍 {VENUE_LOCATION}</div>
-                  <div>🔒 Wi-Fi secured chat</div>
-                  <div>🍸 Hidden Bar inside</div>
-                </div>
-                <button onClick={()=>setShowMenu(true)} style={{width:"100%",marginTop:14,padding:"10px 0",background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:10,color:"#080808",fontWeight:700,fontSize:13,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>🍽️ View Full Menu</button>
+                <button onClick={()=>setShowMenu(true)} style={{width:"100%",marginTop:12,padding:"9px 0",background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:9,color:"#080808",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>🍽️ View Full Menu</button>
+                <div style={{fontSize:10,color:"#2a2a2a",margin:"14px 0 8px",letterSpacing:1}}>VENUE INFO</div>
+                <div style={{fontSize:11,color:"#444",lineHeight:2}}><div>📍 {VENUE_LOCATION}</div><div>🔒 Wi-Fi secured</div><div>🍸 Hidden Bar inside</div></div>
               </>
             )}
           </div>
         </div>
       </div>
 
-      {/* Mobile bottom nav */}
-      <div className="mobile-only" style={{borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,flexDirection:"row",zIndex:10}}>
-        {[["chat","💬","Chat"],["guests","👥","Guests"],["menu_btn","🍽️","Menu"],["venue","✦","Venue"]].map(([v,icon,label])=>(
-          <button key={v} onClick={()=>{if(v==="menu_btn"){setShowMenu(true);}else{setMobileTab(v);}}} style={{flex:1,padding:"10px 4px 8px",background:"none",border:"none",borderTop:`2px solid ${mobileTab===v?GOLD:"transparent"}`,color:mobileTab===v?GOLD:"#444",fontFamily:"Inter,sans-serif",fontSize:10,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:3,transition:"all .2s",position:"relative"}}>
+      {/* ── MOBILE BOTTOM NAV ─────────────────────────────────── */}
+      <div className="mobile-only" style={{height:54,minHeight:54,borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,flexDirection:"row",zIndex:20,alignItems:"stretch",paddingBottom:"env(safe-area-inset-bottom,0px)"}}>
+        {[
+          {v:"chat",icon:"💬",label:"Chat"},
+          {v:"guests",icon:"👥",label:"Guests"},
+          {v:"menu_btn",icon:"🍽️",label:"Menu"},
+          {v:"venue",icon:"✦",label:"Venue"},
+        ].map(({v,icon,label})=>(
+          <button key={v} onClick={()=>{if(v==="menu_btn"){setShowMenu(true);}else{setMobileTab(v);}}}
+            style={{flex:1,padding:"6px 2px 4px",background:"none",border:"none",
+              borderTop:`2px solid ${v!=="menu_btn"&&mobileTab===v?GOLD:"transparent"}`,
+              color:v!=="menu_btn"&&mobileTab===v?GOLD:"#555",
+              fontFamily:"Inter,sans-serif",cursor:"pointer",
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,
+              transition:"color .2s",position:"relative"}}>
             <div style={{position:"relative"}}>
-              <span style={{fontSize:18}}>{icon}</span>
-              {v==="guests"&&totalUnread>0&&<div style={{position:"absolute",top:-4,right:-6,background:"#F87171",color:"#fff",borderRadius:10,padding:"0px 4px",fontSize:9,fontWeight:700,minWidth:14,textAlign:"center",lineHeight:"14px"}}>{totalUnread}</div>}
+              <span style={{fontSize:19,lineHeight:1}}>{icon}</span>
+              {v==="guests"&&totalUnread>0&&(
+                <div style={{position:"absolute",top:-3,right:-5,background:"#F87171",color:"#fff",borderRadius:10,padding:"0 3px",fontSize:8,fontWeight:700,minWidth:12,textAlign:"center",lineHeight:"12px"}}>{totalUnread}</div>
+              )}
             </div>
-            <span style={{letterSpacing:.5}}>{label}</span>
+            <span style={{fontSize:9,letterSpacing:.3}}>{label}</span>
           </button>
         ))}
       </div>
 
-      {/* Mobile guests panel */}
+      {/* ── MOBILE PANELS (full-screen overlays) ─────────────── */}
       {mobileTab==="guests"&&(
-        <div className="mobile-only" style={{position:"fixed",inset:0,background:BG,zIndex:150,flexDirection:"column",overflow:"hidden"}}>
-          <div style={{padding:"14px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE}}>
-            <span style={{fontWeight:600,fontSize:15,color:GOLD}}>Guests Online · {visibleUsers.length}</span>
-            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#666",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        <div className="mobile-only" style={{position:"fixed",top:50,left:0,right:0,bottom:54,background:BG,zIndex:100,flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE,flexShrink:0}}>
+            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>Guests Online · {visibleUsers.length}</span>
+            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
           </div>
-          <div style={{flex:1,overflowY:"auto",padding:12}}>
+          <div style={{flex:1,overflowY:"auto",padding:12,WebkitOverflowScrolling:"touch"}}>
             {visibleUsers.map(u=>(
-              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 8px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}} onClick={()=>{if(u.id!==me.id){setPmTarget(u);markDMRead(u.id);setMobileTab("chat");}}}>
+              <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 10px",borderBottom:`1px solid ${BORDER}`,cursor:u.id!==me.id?"pointer":"default"}}
+                onClick={()=>{if(u.id!==me.id){setPmTarget(u);markDMRead(u.id);setMobileTab("chat");}}}>
                 <div style={{position:"relative",flexShrink:0}}>
                   <Avatar user={u} size={38}/>
                   {unreadDMs[u.id]&&<div className="notif-dot"/>}
                 </div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:500,color:u.id===me.id?GOLD:"#ccc"}}>{u.id===me.id?"You ("+u.name+")":u.name}</div>
-                  <div style={{fontSize:11,color:u.status==="away"?"#F59E0B":"#34D399",marginTop:2}}>{u.status||"online"}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:500,color:u.id===me.id?GOLD:"#ccc",display:"flex",alignItems:"center",gap:6}}>
+                    <span>{u.id===me.id?"You":u.name}</span>
+                    {u.gender&&<span style={{fontSize:13}}>{u.gender==="male"?"👨":u.gender==="female"?"👩":["gay","lesbian","bisexual","trans","nonbinary"].includes(u.gender)?"🏳️‍🌈":"🤐"}</span>}
+                  </div>
+                  <div style={{fontSize:11,color:u.status==="online"?"#34D399":"#F59E0B",marginTop:2}}>{u.status||"online"}</div>
                 </div>
-                {u.id!==me.id&&<span style={{fontSize:12,color:GOLD_DIM,background:`rgba(201,168,76,0.08)`,padding:"4px 10px",borderRadius:8,border:`1px solid ${GOLD_DIM}44`}}>DM</span>}
+                {u.id!==me.id&&<span style={{fontSize:12,color:GOLD_DIM,background:`rgba(201,168,76,0.08)`,padding:"4px 10px",borderRadius:8,border:`1px solid ${GOLD_DIM}44`,flexShrink:0}}>DM</span>}
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* Mobile venue panel */}
       {mobileTab==="venue"&&(
-        <div className="mobile-only" style={{position:"fixed",inset:0,background:BG,zIndex:150,flexDirection:"column",overflow:"hidden"}}>
-          <div style={{padding:"14px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE}}>
-            <span style={{fontWeight:600,fontSize:15,color:GOLD}}>Venue Info</span>
-            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#666",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
+        <div className="mobile-only" style={{position:"fixed",top:50,left:0,right:0,bottom:54,background:BG,zIndex:100,flexDirection:"column",overflow:"hidden"}}>
+          <div style={{padding:"12px 16px",borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",justifyContent:"space-between",background:SURFACE,flexShrink:0}}>
+            <span style={{fontWeight:600,fontSize:14,color:GOLD}}>Venue</span>
+            <button onClick={()=>setMobileTab("chat")} style={{background:"none",border:"none",color:"#555",fontSize:22,cursor:"pointer",lineHeight:1}}>×</button>
           </div>
-          <div style={{flex:1,overflowY:"auto",padding:16}}>
-            <div style={{textAlign:"center",padding:"20px 0 24px"}}>
+          <div style={{flex:1,overflowY:"auto",padding:16,WebkitOverflowScrolling:"touch"}}>
+            <div style={{textAlign:"center",padding:"16px 0 20px"}}>
               <img src={LOGO_SRC} alt="EasyCart" style={{width:64,height:64,objectFit:"contain",background:"#fff",borderRadius:14,padding:5,marginBottom:10}}/>
               <div style={{fontSize:16,fontWeight:700,color:"#e8e0d0"}}>EasyCart</div>
               <div style={{fontSize:13,color:"#555"}}>Barcade & Lounge</div>
               <div style={{fontSize:12,color:"#333",marginTop:3}}>{VENUE_LOCATION}</div>
             </div>
+            <button onClick={()=>{setShowMenu(true);setMobileTab("chat");}} style={{width:"100%",padding:"13px 0",background:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:"none",borderRadius:12,color:"#080808",fontWeight:700,fontSize:15,cursor:"pointer",fontFamily:"Inter,sans-serif",marginBottom:20}}>🍽️ View Full Menu</button>
             <div style={{height:1,background:BORDER,marginBottom:16}}/>
-            <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>TONIGHT</div>
+            <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>TONIGHT'S HIGHLIGHTS</div>
             {announcements.map((a,i)=>(
-              <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"12px 14px",marginBottom:8,fontSize:13,lineHeight:1.6,color:"#ccc"}}>{a}</div>
+              <div key={i} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:10,padding:"11px 13px",marginBottom:8,fontSize:13,lineHeight:1.6,color:"#ccc"}}>{a}</div>
             ))}
-            <div style={{fontSize:11,color:"#444",letterSpacing:1,margin:"18px 0 10px"}}>VENUE INFO</div>
+            <div style={{fontSize:11,color:"#444",letterSpacing:1,margin:"16px 0 10px"}}>VENUE INFO</div>
             <div style={{fontSize:13,color:"#555",lineHeight:2.2}}>
               <div>📍 {VENUE_LOCATION}</div>
               <div>🔒 Wi-Fi secured chat</div>
@@ -1202,122 +1277,26 @@ function ChatRoom({me,onLeave,showToast,notifications}){
         </div>
       )}
 
+      {/* ── OVERLAYS ──────────────────────────────────────────── */}
       {showProfile&&<ProfileCard user={showProfile} me={me} onClose={()=>setShowProfile(null)} onDM={()=>{setPmTarget(showProfile);setShowProfile(null);}} onBlock={()=>blockUser(showProfile.id)} onReport={reportUser}/>}
       {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>{setPmTarget(null);}} notifications={{playSound,pushNotif,markDMRead}}/>}
+      {selectedImg&&<ImageModal src={selectedImg} onClose={()=>setSelectedImg(null)}/>}
       {showMenu&&<MenuModal onClose={()=>setShowMenu(false)}/>}
-      {/* In-app notification popups */}
-      <div style={{position:"fixed",top:70,right:16,zIndex:9998,display:"flex",flexDirection:"column",gap:8,maxWidth:280}}>
+
+      {/* In-app DM notification popups */}
+      <div style={{position:"fixed",top:60,right:12,zIndex:9998,display:"flex",flexDirection:"column",gap:8,maxWidth:260,pointerEvents:"none"}}>
         {notifPopups.map(n=>(
-          <div key={n.id} className="notif-popup" onClick={()=>{if(n.onClick)n.onClick();setNotifPopups(p=>p.filter(x=>x.id!==n.id));}}>
+          <div key={n.id} className="notif-popup" style={{pointerEvents:"all"}} onClick={()=>{if(n.onClick)n.onClick();setNotifPopups(p=>p.filter(x=>x.id!==n.id));}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:20}}>💬</span>
-              <div>
-                <div style={{fontSize:12,color:GOLD,fontWeight:600,marginBottom:2}}>EZChat</div>
-                <div style={{fontSize:13,color:"#ccc"}}>{n.msg}</div>
+              <span style={{fontSize:18}}>💬</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,color:GOLD,fontWeight:600,marginBottom:1}}>EZChat</div>
+                <div style={{fontSize:12,color:"#ccc"}}>{n.msg}</div>
               </div>
-              <button onClick={e=>{e.stopPropagation();setNotifPopups(p=>p.filter(x=>x.id!==n.id));}} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:16,marginLeft:"auto",flexShrink:0,fontFamily:"Inter,sans-serif"}}>×</button>
+              <button onClick={e=>{e.stopPropagation();setNotifPopups(p=>p.filter(x=>x.id!==n.id));}} style={{background:"none",border:"none",color:"#444",cursor:"pointer",fontSize:14,flexShrink:0,fontFamily:"Inter,sans-serif",padding:0}}>×</button>
             </div>
           </div>
         ))}
-      </div>
-      {selectedImg&&<ImageModal src={selectedImg} onClose={()=>setSelectedImg(null)}/>}
-    </div>
-  );
-}
-
-
-// ── Guest Menu Modal ─────────────────────────────────────────────────────────
-function MenuModal({onClose}){
-  const [categories,setCategories]=useState([]);
-  const [items,setItems]=useState([]);
-  const [loading,setLoading]=useState(true);
-  const [menuTab,setMenuTab]=useState("food");
-  const [activeCat,setActiveCat]=useState(null);
-
-  useEffect(()=>{
-    const load=async()=>{
-      setLoading(true);
-      const {data:cats}=await supabase.from("menu_categories").select("*").order("sort_order");
-      const {data:itms}=await supabase.from("menu_items").select("*").eq("available",true).order("sort_order");
-      if(cats)setCategories(cats);
-      if(itms)setItems(itms);
-      if(cats&&cats.length>0){
-        const first=cats.find(c=>c.type==="food");
-        if(first)setActiveCat(first.id);
-      }
-      setLoading(false);
-    };
-    load();
-  },[]);
-
-  const tabs=[
-    {value:"food",label:"🍽️ Food"},
-    {value:"drinks",label:"🍹 Drinks"},
-    {value:"spirits",label:"🥃 Spirits"},
-  ];
-
-  const filteredCats=categories.filter(c=>c.type===menuTab);
-  const activeItems=items.filter(i=>i.category_id===activeCat);
-
-  return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:300,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
-      <div onClick={e=>e.stopPropagation()} style={{width:"100%",maxWidth:680,height:"90dvh",background:BG,borderRadius:"20px 20px 0 0",border:`1px solid ${BORDER}`,borderBottom:"none",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-
-        {/* Header */}
-        <div style={{padding:"16px 20px 0",flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <div>
-              <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:900}} className="gold-text">EasyCart Menu</div>
-              <div style={{fontSize:12,color:"#555",marginTop:2}}>Bar Chow's & Spirits</div>
-            </div>
-            <button onClick={onClose} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:"50%",width:36,height:36,cursor:"pointer",color:"#888",fontSize:18,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>×</button>
-          </div>
-          {/* Main tabs */}
-          <div style={{display:"flex",gap:8,marginBottom:14}}>
-            {tabs.map(t=>(
-              <button key={t.value} onClick={()=>{setMenuTab(t.value);const first=categories.find(c=>c.type===t.value);if(first)setActiveCat(first.id);}} style={{flex:1,padding:"9px 4px",background:menuTab===t.value?`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`:"transparent",border:`1px solid ${menuTab===t.value?GOLD:BORDER}`,borderRadius:10,color:menuTab===t.value?"#080808":"#666",fontSize:13,fontWeight:menuTab===t.value?700:400,cursor:"pointer",fontFamily:"Inter,sans-serif",transition:"all .2s"}}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
-          {/* Category list */}
-          <div style={{width:130,borderRight:`1px solid ${BORDER}`,overflowY:"auto",flexShrink:0,padding:"8px 4px"}}>
-            {loading?[1,2,3,4].map(i=><div key={i} className="skel" style={{height:44,margin:"4px 4px",borderRadius:8}}/>):
-            filteredCats.map(c=>(
-              <button key={c.id} onClick={()=>setActiveCat(c.id)} style={{width:"100%",padding:"10px 8px",background:activeCat===c.id?`rgba(201,168,76,0.12)`:"transparent",border:`1px solid ${activeCat===c.id?GOLD_DIM:"transparent"}`,borderRadius:10,cursor:"pointer",marginBottom:4,textAlign:"left",fontFamily:"Inter,sans-serif",transition:"all .15s"}}>
-                <div style={{fontSize:16,marginBottom:2}}>{c.icon}</div>
-                <div style={{fontSize:11,color:activeCat===c.id?GOLD:"#888",fontWeight:activeCat===c.id?600:400,lineHeight:1.3}}>{c.name}</div>
-              </button>
-            ))}
-          </div>
-
-          {/* Items list */}
-          <div style={{flex:1,overflowY:"auto",padding:"12px 16px"}}>
-            {loading?[1,2,3,4,5].map(i=><div key={i} className="skel" style={{height:52,marginBottom:8,borderRadius:10}}/>):
-            activeItems.length===0?<div style={{color:"#444",textAlign:"center",padding:40,fontSize:14}}>No items in this category</div>:
-            activeItems.map((item,idx)=>(
-              <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"13px 14px",marginBottom:8,background:idx%2===0?SURFACE:SURFACE2,borderRadius:12,border:`1px solid ${BORDER}`,transition:"all .15s"}}
-                onMouseEnter={e=>e.currentTarget.style.borderColor=GOLD_DIM}
-                onMouseLeave={e=>e.currentTarget.style.borderColor=BORDER}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:14,fontWeight:500,color:"#e8e0d0",marginBottom:item.description?3:0}}>{item.name}</div>
-                  {item.description&&<div style={{fontSize:11,color:"#555",lineHeight:1.4}}>{item.description}</div>}
-                </div>
-                <div style={{flexShrink:0,marginLeft:12,textAlign:"right"}}>
-                  <div style={{fontSize:15,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>₱{Number(item.price).toLocaleString()}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div style={{padding:"10px 20px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,textAlign:"center"}}>
-          <div style={{fontSize:11,color:"#444"}}>🔒 Prices may change · Ask staff for today's specials</div>
-        </div>
       </div>
     </div>
   );
@@ -2035,13 +2014,25 @@ export default function App(){
   const notifications=useNotifications(me);
 
   useEffect(()=>{
-    setTimeout(()=>{
-      setWifiOk(true);
-      setScreen("landing");
-    },2000);
+    const init=async()=>{
+      // Try to restore existing session
+      const savedUser = await loadSession();
+      if(savedUser){
+        // Returning user — go straight to chat silently
+        setMe(savedUser);
+        setScreen("chat");
+      } else {
+        // New user — show landing after brief load
+        setTimeout(()=>{
+          setWifiOk(true);
+          setScreen("landing");
+        },1500);
+      }
+    };
+    init();
   },[]);
 
-  // Clean up user session on page close
+  // Clean up user session on page close (mark offline but keep in DB)
   useEffect(()=>{
     if(!me)return;
     const cleanup=()=>supabase.from("users").update({status:"offline"}).eq("id",me.id);
@@ -2073,7 +2064,21 @@ export default function App(){
       {screen==="loading"&&<Loading label="CONNECTING…" sub={`Checking ${VENUE_WIFI}`}/>}
       {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo}/>}
       {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");showToast(`Welcome, ${user.name}! You're in 👑`);}} wifiOk={wifiOk}/>}
-      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={(reason)=>{setMe(null);if(reason==="kicked"||reason==="blocked"){setRemovedReason(reason);setScreen("removed");}else{setScreen("landing");}}} showToast={showToast} notifications={notifications}/>}
+      {screen==="chat"&&me&&<ChatRoom me={me} onLeave={(reason)=>{
+        setMe(null);
+        if(reason==="kicked"||reason==="blocked"){
+          // Clear session — they can't auto-login if blocked/kicked
+          clearSession();
+          setRemovedReason(reason);
+          setScreen("removed");
+        } else if(reason==="manual"){
+          // Manual leave — clear session so they re-register next visit
+          clearSession();
+          setScreen("landing");
+        } else {
+          setScreen("landing");
+        }
+      }} showToast={showToast} notifications={notifications}/>}
       {screen==="admin"&&(
         adminAuthed
           ?<AdminPanel onLogout={()=>{setAdminAuthed(false);setScreen("landing");}}/>
