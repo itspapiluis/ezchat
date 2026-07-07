@@ -576,7 +576,7 @@ export function StaffManagement(){
                 <div style={{fontSize:13,color:"#e8e0d0"}}>{ACTION_LABELS[a.action]||a.action}</div>
                 {a.details&&Object.keys(a.details).length>0&&(
                   <div style={{fontSize:11,color:"#555",marginTop:1}}>
-                    {JSON.stringify(a.details).replace(/[{}"]/g,"").replace(/,/g," · ")}
+                    {JSON.stringify(a.details).replace(/[{}"]/g,"").replace(/,/g:" · ")}
                   </div>
                 )}
               </div>
