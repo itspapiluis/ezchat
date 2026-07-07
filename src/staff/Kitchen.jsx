@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase, ORDER_STATUS, VOID_REASONS, fmtTime, fmtPrice, playAlert, loadStaffSession, clearStaffSession, logAudit } from "./shared.js";
+import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
 const BG = "#080808";
@@ -44,6 +45,7 @@ export default function Kitchen(){
   const audioUnlocked = useRef(false);
 
   const role = loadStaffSession();
+  useAlertEngine(role||"kitchen");
   useEffect(()=>{
     if(role!=="kitchen"&&role!=="admin"){ navigate("/staff"); }
   },[role]);
@@ -193,7 +195,11 @@ export default function Kitchen(){
             </div>
           ))}
         </div>
-        <button onClick={()=>{clearStaffSession();navigate("/staff");}}
+        <AlertBell/>
+        <button onClick={async()=>{
+          await supabase.from("staff_activity").insert({role:"kitchen",action:"logout",details:{}});
+          clearStaffSession();navigate("/staff");
+        }}
           style={{background:"none",border:`1px solid ${BORDER}`,borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,color:"#666",fontFamily:"Inter,sans-serif"}}>
           Logout
         </button>

@@ -1692,7 +1692,13 @@ function BillTab(){
           <span style={{fontSize:15,fontWeight:600,color:"#e8e0d0"}}>Total Bill</span>
           <span style={{fontSize:20,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(billTotal)}</span>
         </div>
-        {billRequested?(
+        {tab?.status==="closed"?(
+          <div style={{textAlign:"center",padding:"14px 0",background:"rgba(52,211,153,0.06)",border:"1px solid rgba(52,211,153,0.25)",borderRadius:12}}>
+            <div style={{fontSize:20,marginBottom:4}}>✅</div>
+            <div style={{fontSize:14,color:"#34D399",fontWeight:600}}>Bill Paid — Thank You!</div>
+            <div style={{fontSize:12,color:"#666",marginTop:3}}>Hope to see you again at EasyCart!</div>
+          </div>
+        ):billRequested?(
           <div style={{textAlign:"center",padding:"12px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:12}}>
             <div style={{fontSize:14,color:"#F59E0B",fontWeight:600}}>⏳ Bill Requested</div>
             <div style={{fontSize:12,color:"#666",marginTop:3}}>Staff will be with you shortly</div>
@@ -2132,6 +2138,19 @@ function AdminLogin({onSuccess,onBack}){
   );
 }
 
+// Report components — loaded via dynamic import
+const ReportComponents = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.SalesReports/>})));
+const AnalyticsComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.Analytics/>})));
+const VoidComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.VoidReports/>})));
+const StaffMgmtComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.StaffManagement/>})));
+const AlertsComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.AdminAlerts/>})));
+
+const Suspensed = ({C})=>(
+  <React.Suspense fallback={<div style={{textAlign:"center",padding:40,color:"#555"}}>Loading…</div>}>
+    <C/>
+  </React.Suspense>
+);
+
 function AdminPanel({onLogout}){
   const [tab,setTab]=useState("dashboard");
   const [users,setUsers]=useState([]);
@@ -2328,7 +2347,7 @@ function AdminPanel({onLogout}){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
-        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["settings","⚙️ Settings"]].map(([v,l])=>(
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -2522,6 +2541,41 @@ function AdminPanel({onLogout}){
           <div style={{flex:1,overflow:"hidden"}}>
             <AdminMenuEditor/>
           </div>
+        </div>
+      )}
+
+      {/* ── REPORTS ── */}
+      {tab==="reports"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={ReportComponents}/>
+        </div>
+      )}
+
+      {/* ── ANALYTICS ── */}
+      {tab==="analytics"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={AnalyticsComponent}/>
+        </div>
+      )}
+
+      {/* ── VOID REPORTS ── */}
+      {tab==="voids"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={VoidComponent}/>
+        </div>
+      )}
+
+      {/* ── STAFF MANAGEMENT ── */}
+      {tab==="staff"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={StaffMgmtComponent}/>
+        </div>
+      )}
+
+      {/* ── ADMIN ALERTS ── */}
+      {tab==="alerts"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={AlertsComponent}/>
         </div>
       )}
 

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { STAFF_PINS, ROLE_LABELS, ROLE_COLORS, ROLE_ICONS, saveStaffSession } from "./shared.js";
+import { STAFF_PINS, ROLE_LABELS, ROLE_COLORS, ROLE_ICONS, saveStaffSession, supabase } from "./shared.js";
 
 const LOGO_STYLE = {
   fontFamily:"'Georgia',serif",fontSize:28,fontWeight:900,
@@ -42,9 +42,21 @@ export default function StaffLogin(){
     if(next.length === 6) setTimeout(()=>verifyPin(next), 120);
   };
 
-  const verifyPin = (p) => {
-    if(p === STAFF_PINS[selectedRole]){
+  const verifyPin = async(p) => {
+    // Try to get PIN from Supabase first, fallback to hardcoded
+    let correctPin = STAFF_PINS[selectedRole];
+    try{
+      const {data} = await supabase.from("staff_config").select("value").eq("key",`pin_${selectedRole}`).single();
+      if(data?.value) correctPin = data.value;
+    }catch(e){}
+
+    if(p === correctPin){
       saveStaffSession(selectedRole);
+      // Log login activity
+      await supabase.from("staff_activity").insert({
+        role:selectedRole, action:"login",
+        details:{}, device_hint:navigator.userAgent.slice(0,50)
+      }).catch(()=>{});
       navigate(ROUTES[selectedRole]);
     } else {
       setError("Incorrect PIN. Try again.");

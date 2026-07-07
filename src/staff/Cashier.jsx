@@ -5,6 +5,7 @@ import {
   playAlert, loadStaffSession, clearStaffSession,
   PAYMENT_METHODS, VOID_REASONS, logAudit
 } from "./shared.js";
+import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
 const GOLD_LIGHT = "#E8C96A";
@@ -65,6 +66,7 @@ export default function Cashier(){
 
   const audioUnlocked = useRef(false);
   const role = loadStaffSession();
+  useAlertEngine(role||"cashier");
 
   useEffect(()=>{
     if(role!=="cashier"&&role!=="admin"){ navigate("/staff"); }
@@ -150,6 +152,10 @@ export default function Cashier(){
     });
     if(!error){
       await logAudit("discount_applied","discounts",selectedTab.id,{type:discType,value:discValue,reason:discReason},"cashier");
+      await supabase.from("staff_activity").insert({
+        role:"cashier", action:"discount",
+        details:{table_id:selectedTab.table_id, type:discType, value:discValue}
+      }).catch(()=>{});
       await loadTabItems(selectedTab.id);
       setDiscountModal(false);
       setDiscValue("");setDiscReason("");setDiscType("percent");
@@ -219,6 +225,10 @@ export default function Cashier(){
       await logAudit("bill_paid","table_tabs",selectedTab.id,{
         total:grandTotal, payment_method:payMethod, receipt_id:receipt.id
       },"cashier");
+      await supabase.from("staff_activity").insert({
+        role:"cashier", action:"payment",
+        details:{table_id:selectedTab.table_id, total:grandTotal, method:payMethod}
+      }).catch(()=>{});
 
       setReceiptModal({...receipt, items:receiptItems});
       setPayModal(false);
@@ -278,8 +288,11 @@ export default function Cashier(){
             </div>
           ))}
         </div>
-        <button onClick={()=>{clearStaffSession();navigate("/staff");}}
-          style={{background:"none",border:`1px solid ${BORDER}`,borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,color:"#666",fontFamily:"Inter,sans-serif"}}>
+        <AlertBell/>
+        <button onClick={async()=>{
+          await supabase.from("staff_activity").insert({role:"cashier",action:"logout",details:{}});
+          clearStaffSession();navigate("/staff");
+        }} style={{background:"none",border:`1px solid ${BORDER}`,borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,color:"#666",fontFamily:"Inter,sans-serif"}}>
           Logout
         </button>
       </div>
