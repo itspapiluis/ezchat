@@ -97,9 +97,17 @@ export function loadStaffSession(){ return localStorage.getItem(SESSION_KEY)||nu
 export function clearStaffSession(){ localStorage.removeItem(SESSION_KEY); }
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
+// BUGFIX: this used to throw if the audit insert failed (RLS, offline, bad
+// column). Callers `await` it right after doing real work — so a failed LOG
+// would abort the operation it was logging. Logging must never break the app.
 export async function logAudit(action,entity,entityId,details,performedBy){
-  await supabase.from("audit_logs").insert({
-    action,entity,entity_id:String(entityId||""),
-    details,performed_by:performedBy||"staff"
-  });
+  try{
+    const {error} = await supabase.from("audit_logs").insert({
+      action,entity,entity_id:String(entityId||""),
+      details,performed_by:performedBy||"staff"
+    });
+    if(error) console.warn("audit log failed:",error.message);
+  }catch(e){
+    console.warn("audit log failed:",e?.message||e);
+  }
 }

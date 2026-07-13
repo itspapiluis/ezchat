@@ -33,6 +33,19 @@ const NEXT_ACTION = {
   ready:     { label:"Mark Served",   color:"#888",    next:"served"    },
 };
 
+// BUGFIX: Kitchen and Bar used to read `order.status` — a SINGLE shared row.
+// An order can hold food AND drinks, so when the kitchen marked the burger
+// ready, the bar's beer flipped to "Ready" too. Each station must judge only
+// ITS OWN items. `order.items` is already filtered to this station's category.
+// Rule: the least-advanced live item decides. All voided → "voided".
+const RANK = { pending:1, preparing:2, ready:3, served:4 };
+function stationStatus(order){
+  const live = (order.items||[]).filter(i=>!i.voided);
+  if(!live.length) return "voided";
+  const min = Math.min(...live.map(i=>RANK[i.status]||1));
+  return STATUS_FLOW[min-1] || "pending";
+}
+
 export default function Kitchen(){
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
@@ -100,7 +113,7 @@ export default function Kitchen(){
       .from("orders")
       .select("*, order_items(*)")
       .eq("id",orderId)
-      .single();
+      .maybeSingle();   // BUGFIX: .single() throws when the row is gone
     if(data){
       const hasFoodItems = data.order_items?.some(i=>i.category_type==="food"&&!i.voided);
       if(!hasFoodItems) return;
@@ -119,19 +132,22 @@ export default function Kitchen(){
   };
 
   const advanceStatus = async(order)=>{
-    const action = NEXT_ACTION[order.status];
+    const action = NEXT_ACTION[stationStatus(order)];
     if(!action) return;
-    const {error} = await supabase.from("orders").update({
-      status:action.next, updated_at:new Date().toISOString()
-    }).eq("id",order.id);
-    if(!error){
-      await supabase.from("order_items")
-        .update({status:action.next})
-        .eq("order_id",order.id)
-        .eq("voided",false)
-        .in("category_type",["food"]);
-      await logAudit(`order_${action.next}`,"orders",order.id,{table_id:order.table_id},"kitchen");
+    // BUGFIX: this used to UPDATE `orders.status` first — the row the BAR also
+    // reads — which is what made the bar's drinks jump to "Ready" whenever the
+    // kitchen advanced. We now touch ONLY this station's items. The DB trigger
+    // recalc_order_status() rolls `orders.status` up from the items.
+    const {error} = await supabase.from("order_items")
+      .update({status:action.next})
+      .eq("order_id",order.id)
+      .eq("voided",false)
+      .in("category_type",["food"]);
+    if(error){
+      console.warn("advanceStatus failed:",error.message);
+      return;
     }
+    await logAudit(`order_${action.next}`,"orders",order.id,{table_id:order.table_id},"kitchen");
   };
 
   const openVoidModal = (order)=>{
@@ -143,33 +159,42 @@ export default function Kitchen(){
   const submitVoid = async()=>{
     if(!voidReason) return;
     const reason = voidNote ? `${voidReason}: ${voidNote}` : voidReason;
-    // Void all food items in this order
-    await supabase.from("order_items")
+    // Void only THIS station's items.
+    // BUGFIX: this used to also set the whole ORDER to "voided". The kitchen
+    // voiding a burger made the guest's beer vanish from the Bar screen — while
+    // still being billed, because billing reads order_items (where the beer was
+    // never voided). The DB trigger now marks the order voided only when EVERY
+    // station has voided its items.
+    const {error:ve} = await supabase.from("order_items")
       .update({voided:true, void_reason:reason, voided_at:new Date().toISOString(), status:"voided"})
       .eq("order_id",voidModal.id)
+      .eq("voided",false)
       .in("category_type",["food"]);
-    await supabase.from("orders").update({status:"voided",updated_at:new Date().toISOString()}).eq("id",voidModal.id);
-    // Log void
-    await supabase.from("void_logs").insert(
-      voidModal.items?.filter(i=>!i.voided).map(i=>({
-        order_item_id:i.id, tab_id:i.tab_id, table_id:i.table_id,
-        item_name:i.item_name, item_price:i.item_price, quantity:i.quantity,
-        reason, voided_by:"kitchen"
-      }))
-    );
+    if(ve){
+      console.warn("void failed:",ve.message);
+      setVoidModal(null);
+      return;
+    }
+    // BUGFIX: if items was undefined this called .insert(undefined) and threw.
+    const rows = (voidModal.items||[]).filter(i=>!i.voided).map(i=>({
+      order_item_id:i.id, tab_id:i.tab_id, table_id:i.table_id,
+      item_name:i.item_name, item_price:i.item_price, quantity:i.quantity,
+      reason, voided_by:"kitchen"
+    }));
+    if(rows.length) await supabase.from("void_logs").insert(rows);
     await logAudit("order_voided","orders",voidModal.id,{reason},"kitchen");
     setVoidModal(null);
     loadOrders();
   };
 
   const filtered = orders.filter(o=>{
-    if(filter==="active") return ["pending","preparing","ready"].includes(o.status);
-    if(filter==="served") return o.status==="served";
+    if(filter==="active") return ["pending","preparing","ready"].includes(stationStatus(o));
+    if(filter==="served") return stationStatus(o)==="served";
     return true;
   });
 
-  const pendingCount = orders.filter(o=>o.status==="pending").length;
-  const preparingCount = orders.filter(o=>o.status==="preparing").length;
+  const pendingCount = orders.filter(o=>stationStatus(o)==="pending").length;
+  const preparingCount = orders.filter(o=>stationStatus(o)==="preparing").length;
 
   return(
     <div style={{minHeight:"100dvh",background:BG,display:"flex",flexDirection:"column"}} onClick={unlockAudio}>
@@ -227,8 +252,9 @@ export default function Kitchen(){
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
           {filtered.map(order=>{
             const isNew = newIds.has(order.id);
-            const action = NEXT_ACTION[order.status];
-            const st = ORDER_STATUS[order.status]||ORDER_STATUS.pending;
+            const sStatus = stationStatus(order);
+            const action = NEXT_ACTION[sStatus];
+            const st = ORDER_STATUS[sStatus]||ORDER_STATUS.pending;
             return(
               <div key={order.id} className={`fade-in${isNew?" new-flash":""}`}
                 style={{background:SURFACE,border:`2px solid ${st.color}44`,borderRadius:16,overflow:"hidden",transition:"all .3s"}}>
@@ -261,7 +287,7 @@ export default function Kitchen(){
                   )}
                 </div>
                 {/* Actions */}
-                {order.status!=="served"&&order.status!=="voided"&&(
+                {sStatus!=="served"&&sStatus!=="voided"&&(
                   <div style={{padding:"10px 16px",borderTop:`1px solid ${BORDER}`,display:"flex",gap:8}}>
                     {action&&(
                       <button className="btn-gold" onClick={()=>advanceStatus(order)}

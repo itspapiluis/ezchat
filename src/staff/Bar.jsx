@@ -32,6 +32,19 @@ const NEXT_ACTION = {
   ready:     { label:"Mark Served",  color:"#888",    next:"served"    },
 };
 
+// BUGFIX: the Bar used to read `order.status` — the SAME row the Kitchen wrote
+// to. An order can hold food AND drinks, so the kitchen marking the burger
+// ready flipped the beer to "Ready" before anyone poured it. Each station now
+// judges only ITS OWN items (`order.items` is pre-filtered to drinks/spirits).
+const STATUS_FLOW = ["pending","preparing","ready","served"];
+const RANK = { pending:1, preparing:2, ready:3, served:4 };
+function stationStatus(order){
+  const live = (order.items||[]).filter(i=>!i.voided);
+  if(!live.length) return "voided";
+  const min = Math.min(...live.map(i=>RANK[i.status]||1));
+  return STATUS_FLOW[min-1] || "pending";
+}
+
 export default function Bar(){
   const navigate = useNavigate();
   const [orders, setOrders] = useState([]);
@@ -94,7 +107,7 @@ export default function Bar(){
       .from("orders")
       .select("*, order_items(*)")
       .eq("id",orderId)
-      .single();
+      .maybeSingle();   // BUGFIX: .single() throws when the row is gone
     if(data){
       const hasDrinkItems = data.order_items?.some(i=>["drinks","spirits"].includes(i.category_type)&&!i.voided);
       if(!hasDrinkItems) return;
@@ -113,45 +126,59 @@ export default function Bar(){
   };
 
   const advanceStatus = async(order)=>{
-    const action = NEXT_ACTION[order.status];
+    const action = NEXT_ACTION[stationStatus(order)];
     if(!action) return;
-    await supabase.from("orders").update({status:action.next,updated_at:new Date().toISOString()}).eq("id",order.id);
-    await supabase.from("order_items")
+    // BUGFIX: no longer writes `orders.status` (the row the Kitchen shares).
+    // Only this station's items change; the DB trigger recalc_order_status()
+    // rolls the parent order up from them.
+    const {error} = await supabase.from("order_items")
       .update({status:action.next})
       .eq("order_id",order.id)
       .eq("voided",false)
       .in("category_type",["drinks","spirits"]);
+    if(error){
+      console.warn("advanceStatus failed:",error.message);
+      return;
+    }
     await logAudit(`order_${action.next}`,"orders",order.id,{table_id:order.table_id},"bar");
   };
 
   const submitVoid = async()=>{
     if(!voidReason) return;
     const reason = voidNote?`${voidReason}: ${voidNote}`:voidReason;
-    await supabase.from("order_items")
+    // BUGFIX: voids only THIS station's drinks now. It used to also mark the
+    // whole ORDER voided, which erased the guest's food from the Kitchen screen
+    // while still billing them for it.
+    const {error:ve} = await supabase.from("order_items")
       .update({voided:true,void_reason:reason,voided_at:new Date().toISOString(),status:"voided"})
       .eq("order_id",voidModal.id)
+      .eq("voided",false)
       .in("category_type",["drinks","spirits"]);
-    await supabase.from("orders").update({status:"voided",updated_at:new Date().toISOString()}).eq("id",voidModal.id);
-    await supabase.from("void_logs").insert(
-      voidModal.items?.filter(i=>!i.voided).map(i=>({
-        order_item_id:i.id,tab_id:i.tab_id,table_id:i.table_id,
-        item_name:i.item_name,item_price:i.item_price,quantity:i.quantity,
-        reason,voided_by:"bar"
-      }))
-    );
+    if(ve){
+      console.warn("void failed:",ve.message);
+      setVoidModal(null);
+      return;
+    }
+    // BUGFIX: .insert(undefined) threw when items was missing.
+    const rows = (voidModal.items||[]).filter(i=>!i.voided).map(i=>({
+      order_item_id:i.id,tab_id:i.tab_id,table_id:i.table_id,
+      item_name:i.item_name,item_price:i.item_price,quantity:i.quantity,
+      reason,voided_by:"bar"
+    }));
+    if(rows.length) await supabase.from("void_logs").insert(rows);
     await logAudit("order_voided","orders",voidModal.id,{reason},"bar");
     setVoidModal(null);
     loadOrders();
   };
 
   const filtered = orders.filter(o=>{
-    if(filter==="active") return ["pending","preparing","ready"].includes(o.status);
-    if(filter==="served") return o.status==="served";
+    if(filter==="active") return ["pending","preparing","ready"].includes(stationStatus(o));
+    if(filter==="served") return stationStatus(o)==="served";
     return true;
   });
 
-  const pendingCount = orders.filter(o=>o.status==="pending").length;
-  const preparingCount = orders.filter(o=>o.status==="preparing").length;
+  const pendingCount = orders.filter(o=>stationStatus(o)==="pending").length;
+  const preparingCount = orders.filter(o=>stationStatus(o)==="preparing").length;
 
   return(
     <div style={{minHeight:"100dvh",background:BG,display:"flex",flexDirection:"column"}} onClick={unlockAudio}>
@@ -201,8 +228,9 @@ export default function Bar(){
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
           {filtered.map(order=>{
             const isNew = newIds.has(order.id);
-            const action = NEXT_ACTION[order.status];
-            const st = ORDER_STATUS[order.status]||ORDER_STATUS.pending;
+            const sStatus = stationStatus(order);
+            const action = NEXT_ACTION[sStatus];
+            const st = ORDER_STATUS[sStatus]||ORDER_STATUS.pending;
             return(
               <div key={order.id} className={`fade-in${isNew?" new-flash":""}`}
                 style={{background:SURFACE,border:`2px solid ${st.color}44`,borderRadius:16,overflow:"hidden"}}>
@@ -230,7 +258,7 @@ export default function Bar(){
                     <div style={{marginTop:8,fontSize:12,color:"#888",background:SURFACE2,borderRadius:8,padding:"6px 10px"}}>📝 {order.note}</div>
                   )}
                 </div>
-                {order.status!=="served"&&order.status!=="voided"&&(
+                {sStatus!=="served"&&sStatus!=="voided"&&(
                   <div style={{padding:"10px 16px",borderTop:`1px solid ${BORDER}`,display:"flex",gap:8}}>
                     {action&&(
                       <button className="btn-gold" onClick={()=>advanceStatus(order)}
