@@ -6,12 +6,14 @@ import StaffLogin from './staff/StaffLogin.jsx'
 import Kitchen from './staff/Kitchen.jsx'
 import Bar from './staff/Bar.jsx'
 import Cashier from './staff/Cashier.jsx'
-import { loadStaffSession } from './staff/shared.js'
+import { hasStaffRole } from './staff/shared.js'
 
+// BUGFIX: this used to read ONE stored role and compare it. With Kitchen open in
+// one tab and Bar in another, the stored role was whichever logged in last — so
+// the other tab got kicked to /staff on its next re-render. Now each route asks
+// only: "is this browser authorised for MY role?"
 function ProtectedRoute({ children, allowedRole }){
-  const role = loadStaffSession();
-  if(!role) return <Navigate to="/staff" replace/>;
-  if(allowedRole && role !== allowedRole && role !== "admin") return <Navigate to="/staff" replace/>;
+  if(!hasStaffRole(allowedRole)) return <Navigate to="/staff" replace/>;
   return children;
 }
 

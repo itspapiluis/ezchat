@@ -91,10 +91,61 @@ export function playAlert(type="new_order"){
 }
 
 // ── Session ───────────────────────────────────────────────────────────────────
-const SESSION_KEY = "ezchat_staff_session";
-export function saveStaffSession(role){ localStorage.setItem(SESSION_KEY,role); }
-export function loadStaffSession(){ return localStorage.getItem(SESSION_KEY)||null; }
-export function clearStaffSession(){ localStorage.removeItem(SESSION_KEY); }
+// ── Staff session ─────────────────────────────────────────────────────────────
+// THE BUG: the old code stored ONE role under ONE localStorage key. localStorage
+// is shared by every tab in a browser, so opening Kitchen in tab 1 and Bar in
+// tab 2 meant the second login OVERWROTE the first. The moment tab 1 re-rendered
+// (any new order, any realtime event) ProtectedRoute re-read the key, saw the
+// wrong role, and bounced you back to the role picker.
+//
+// (Separate DEVICES were never affected — each device has its own localStorage.
+//  This only ever bit you when two stations shared one browser.)
+//
+// THE FIX: store each role under its OWN key. A browser can hold several roles
+// at once, so Kitchen / Bar / Cashier can run in three tabs side by side.
+//
+// We deliberately keep localStorage (not sessionStorage) so a station stays
+// logged in when the tablet reboots or the browser is closed mid-service —
+// nobody wants to re-key a PIN during a rush.
+const SESSION_PREFIX = "ezchat_staff_role_";
+const LEGACY_KEY     = "ezchat_staff_session";
+
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(_){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(_){} },
+  del(k){ try{ localStorage.removeItem(k); }catch(_){} },
+};
+
+export function saveStaffSession(role){
+  store.set(SESSION_PREFIX + role, "1");
+  store.del(LEGACY_KEY);        // retire the old single-role key
+}
+
+// Is this browser authorised for `role`?
+export function hasStaffRole(role){
+  if(!role) return false;
+  if(store.get(SESSION_PREFIX + role) === "1") return true;
+  if(store.get(SESSION_PREFIX + "admin") === "1") return true;  // admin opens any door
+  return store.get(LEGACY_KEY) === role;                        // honour an old session
+}
+
+// Kept for callers that just want "some role" (e.g. the logout button).
+export function loadStaffSession(){
+  for(const r of ["kitchen","bar","cashier","admin"]){
+    if(store.get(SESSION_PREFIX + r) === "1") return r;
+  }
+  return store.get(LEGACY_KEY) || null;
+}
+
+// Log out of ONE role, or everything if no role is given.
+export function clearStaffSession(role){
+  if(role){
+    store.del(SESSION_PREFIX + role);
+  }else{
+    for(const r of ["kitchen","bar","cashier","admin"]) store.del(SESSION_PREFIX + r);
+  }
+  store.del(LEGACY_KEY);
+}
 
 // ── Audit log ─────────────────────────────────────────────────────────────────
 // BUGFIX: this used to throw if the audit insert failed (RLS, offline, bad

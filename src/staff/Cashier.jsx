@@ -318,7 +318,7 @@ export default function Cashier(){
         <AlertBell/>
         <button onClick={async()=>{
           await supabase.from("staff_activity").insert({role:"cashier",action:"logout",details:{}});
-          clearStaffSession();navigate("/staff");
+          clearStaffSession("cashier");navigate("/staff");
         }} style={{background:"none",border:`1px solid ${BORDER}`,borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:12,color:"#666",fontFamily:"Inter,sans-serif"}}>
           Logout
         </button>
