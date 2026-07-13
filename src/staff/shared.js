@@ -1,17 +1,13 @@
-import { createClient } from "@supabase/supabase-js";
-
-export const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+import { supabase } from "../lib/supabase.js";
+export { supabase };
 
 // ── Staff PINs ────────────────────────────────────────────────────────────────
-export const STAFF_PINS = {
-  kitchen: "111111",
-  bar:     "222222",
-  cashier: "333333",
-  admin:   "143143",
-};
+// PHASE 7 SECURITY: PINs are NO LONGER stored here. They lived in the shipped
+// JavaScript bundle, meaning any guest could read them in DevTools.
+// They now live in the `staff_config` table and are checked server-side by the
+// verify_staff_pin() function. Change them in:
+//   Supabase → Table Editor → staff_config
+export const STAFF_ROLES = ["kitchen","bar","cashier","admin"];
 
 export const ROLE_LABELS = {
   kitchen: "Kitchen",

@@ -1,11 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { createClient } from "@supabase/supabase-js";
-
-// ── Supabase client ───────────────────────────────────────────────────────────
-// Replace these with your actual Supabase project values from supabase.com
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "YOUR_SUPABASE_URL";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "YOUR_SUPABASE_ANON_KEY";
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+import { supabase } from "./lib/supabase.js";
+import { logError, installErrorHandlers, rateLimit, verifyStaffPin } from "./lib/prod.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LOGO_SRC = "https://fmnptbqlvyujgmmjttcu.supabase.co/storage/v1/object/public/chat-images/ezcart%20logo.jpg";
@@ -50,20 +45,33 @@ function getTableFromURL(){
 
 // Get or create open tab for this table
 async function getOrCreateTab(tableId){
-  // Check for existing open tab
-  const {data:existing} = await supabase
+  // BUGFIX 1: this only matched status="open". Once a table requested the bill
+  // (status="bill_requested"), it looked like NO tab existed and a SECOND tab
+  // was opened for the same table — splitting the bill in two.
+  // BUGFIX 2: .single() throws when there are 0 rows; .maybeSingle() returns null.
+  const findOpen = async () =>
+    (await supabase
+      .from("table_tabs")
+      .select("*")
+      .eq("table_id", tableId)
+      .in("status", ["open", "bill_requested"])
+      .order("opened_at", { ascending: false })   // table_tabs has opened_at, NOT created_at
+      .limit(1)
+      .maybeSingle()).data;
+
+  const existing = await findOpen();
+  if (existing) return existing;
+
+  // BUGFIX 3: two guests scanning the same table's QR at the same moment both
+  // saw "no tab" and both created one. A unique index in the DB now blocks the
+  // duplicate; if the insert loses the race, we just re-read the winner's tab.
+  const { data: created, error } = await supabase
     .from("table_tabs")
-    .select("*")
-    .eq("table_id", tableId)
-    .eq("status", "open")
-    .single();
-  if(existing) return existing;
-  // Create new tab
-  const {data:created} = await supabase
-    .from("table_tabs")
-    .insert({table_id: tableId, status:"open", total:0})
+    .insert({ table_id: tableId, status: "open", total: 0 })
     .select()
     .single();
+
+  if (error) return await findOpen();   // someone else won the race
   return created;
 }
 
@@ -518,6 +526,11 @@ function Entry({onEnter,wifiOk,tableId}){
 
   const checkCode=async()=>{
     if(!accessCode.trim()){setAccessError("Please enter the access code.");return;}
+    // Phase 7 — brute-force guard on the venue access code (5 tries / 5 min)
+    if(!await rateLimit(getDeviceFingerprint(),"join")){
+      setAccessError("Too many attempts. Please wait a few minutes.");
+      return;
+    }
     try{
       const {data,error}=await supabase.from("settings").select("value").eq("key","access_code").single();
       const correct=((error||!data?.value)?"EASYCART2025":data.value).trim().toUpperCase();
@@ -528,6 +541,7 @@ function Entry({onEnter,wifiOk,tableId}){
         setAccessError("Incorrect code. Please ask staff for the access code.");
       }
     }catch(e){
+      logError("checkCode",e);
       setAccessError("Could not verify code. Check your Wi-Fi and try again.");
     }
   };
@@ -793,9 +807,11 @@ function PMPanel({target,me,onClose,notifications}){
 
   const send=async()=>{
     if(!input.trim())return;
+    if(!await rateLimit(me.id,"dm"))return; // Phase 7 — DM spam guard
     const text=filterMsg(input.trim());
     setInput("");
-    await supabase.from("direct_messages").insert({from_id:me.id,to_id:target.id,text,created_at:new Date().toISOString()});
+    const {error}=await supabase.from("direct_messages").insert({from_id:me.id,to_id:target.id,text,created_at:new Date().toISOString()});
+    if(error)logError("sendDM",error,{user_id:me.id});
   };
 
   return(
@@ -820,7 +836,7 @@ function PMPanel({target,me,onClose,notifications}){
           <div ref={endRef}/>
         </div>
         <div style={{padding:"10px 12px",borderTop:`1px solid ${BORDER}`,display:"flex",gap:8,background:SURFACE}}>
-          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Type a message…" style={{flex:1,padding:"9px 13px",fontSize:14}}/>
+          <input value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&send()} placeholder="Type a message…" maxLength={500} style={{flex:1,padding:"9px 13px",fontSize:14}}/>
           <button className="btn-gold" onClick={send} style={{padding:"9px 16px",fontSize:13,borderRadius:8}}>Send</button>
         </div>
       </div>
@@ -835,6 +851,10 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   const hasTable = !!tableId;
   const [messages,setMessages]=useState([]);
   const [users,setUsers]=useState([]);
+  // Mirror of `users` that the realtime message handler can read without being
+  // re-created (and re-subscribed) on every user-list change.
+  const usersRef=useRef([]);
+  useEffect(()=>{usersRef.current=users;},[users]);
   const [input,setInput]=useState("");
   const [typingUsers,setTypingUsers]=useState([]);
   const [showEmoji,setShowEmoji]=useState(false);
@@ -900,7 +920,15 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
     const ch=supabase.channel("room-messages")
       .on("postgres_changes",{event:"INSERT",schema:"public",table:"messages",filter:`room_id=eq.${ROOM_ID}`},async payload=>{
         const m=payload.new;
-        const {data:userData}=await supabase.from("users").select("id,name,color,status").eq("id",m.user_id).single();
+        // EGRESS FIX: this fired a SELECT on `users` for EVERY message, on EVERY
+        // phone in the room. One message from a table of 60 = 60 extra queries.
+        // The sender is almost always already in the `users` list we hold —
+        // only hit the network for someone we've genuinely never seen.
+        let userData = usersRef.current.find(u=>u.id===m.user_id);
+        if(!userData){
+          const {data}=await supabase.from("users").select("id,name,color,status").eq("id",m.user_id).maybeSingle();
+          userData=data;
+        }
         setMessages(p=>[...p,{...m,users:userData}]);
         // Notify for messages from others (not system)
         if(m.user_id!==me.id&&m.type!=="system"){
@@ -922,15 +950,39 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
 
   // ── Load and subscribe to online users ──
   useEffect(()=>{
+    // EGRESS FIX (the big one). Every guest heartbeats into `users`. This channel
+    // listened to event:"*" on that table, so EVERY heartbeat from EVERY guest
+    // pushed an event to EVERY guest, and each one ran a full `SELECT *`.
+    // That is N x N full-table reads per heartbeat cycle — quadratic. 60 guests
+    // in a silent room generated ~432,000 reads/hour.
+    //
+    // Fix: coalesce the storm. However many events arrive, we re-read at most
+    // once every 6 seconds — and only the columns we actually render.
+    let timer=null, dead=false;
+
     const load=async()=>{
-      const {data}=await supabase.from("users").select("*").eq("room_id",ROOM_ID).gte("last_seen",new Date(Date.now()-300000).toISOString());
-      if(data)setUsers(data);
+      const {data}=await supabase
+        .from("users")
+        .select("id,name,color,status,gender,avatar_url,last_seen")  // real columns, not "*"
+        .eq("room_id",ROOM_ID)
+        .gte("last_seen",new Date(Date.now()-300000).toISOString());
+      if(data&&!dead)setUsers(data);
     };
+
+    const loadDebounced=()=>{
+      if(timer)return;                       // a refresh is already queued
+      timer=setTimeout(()=>{ timer=null; load(); },6000);
+    };
+
     load();
     const ch=supabase.channel("room-users")
-      .on("postgres_changes",{event:"*",schema:"public",table:"users",filter:`room_id=eq.${ROOM_ID}`},load)
+      .on("postgres_changes",{event:"*",schema:"public",table:"users",filter:`room_id=eq.${ROOM_ID}`},loadDebounced)
       .subscribe();
-    return()=>supabase.removeChannel(ch);
+    return()=>{
+      dead=true;
+      if(timer)clearTimeout(timer);
+      supabase.removeChannel(ch);
+    };
   },[]);
 
   // ── Listen for incoming DMs (for red dot + notification when PM panel is closed) ──
@@ -977,18 +1029,32 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   // ── Heartbeat — keep user online ──
   useEffect(()=>{
     const beat=async()=>{
-      const {data,error}=await supabase.from("users").select("status").eq("id",me.id).single();
-      // If user no longer exists (wiped by 1PM cleanup), clear session and go to landing
-      if(error||!data){
-        clearSession();
-        onLeave("landing");
-        return;
+      // EGRESS FIX: this used to do TWO queries every 30s per guest — a SELECT
+      // to check status, then an UPDATE. The UPDATE can return the row itself,
+      // so one round-trip does both. Kick/block already arrives instantly on the
+      // dedicated `user-status-${me.id}` realtime channel, so the SELECT was
+      // redundant anyway.
+      const {data,error}=await supabase
+        .from("users")
+        .update({last_seen:new Date().toISOString(),status:"online"})
+        .eq("id",me.id)
+        .neq("status","blocked")
+        .neq("status","kicked")
+        .select("status")
+        .maybeSingle();
+
+      // No row came back AND no error → the user was wiped by cleanup, or is
+      // blocked/kicked (in which case the status channel handles the redirect).
+      if(error){ logError("heartbeat",error,{user_id:me.id}); return; }
+      if(!data){
+        const {data:still}=await supabase.from("users").select("id").eq("id",me.id).maybeSingle();
+        if(!still){ clearSession(); onLeave("landing"); }
       }
-      if(data.status==="blocked"||data.status==="kicked")return;
-      await supabase.from("users").update({last_seen:new Date().toISOString(),status:"online"}).eq("id",me.id);
     };
     beat();
-    const t=setInterval(beat,30000);
+    // EGRESS FIX: 30s → 60s. Halves heartbeat traffic. The presence list still
+    // filters on last_seen within 5 minutes, so nobody drops off early.
+    const t=setInterval(beat,60000);
     return()=>{
       clearInterval(t);
       supabase.from("users").update({status:"offline",last_seen:new Date().toISOString()}).eq("id",me.id);
@@ -997,6 +1063,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   },[me.id,me.name]);
 
   // ── Typing indicators via Supabase Realtime broadcast ──
+  const typingCh = useRef(null);   // BUGFIX: reuse ONE subscribed channel
   useEffect(()=>{
     const ch=supabase.channel(`typing-${ROOM_ID}`)
       .on("broadcast",{event:"typing"},(payload)=>{
@@ -1009,11 +1076,15 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
         });
       })
       .subscribe();
-    return()=>supabase.removeChannel(ch);
+    typingCh.current=ch;
+    return()=>{ typingCh.current=null; supabase.removeChannel(ch); };
   },[me.id]);
 
+  // BUGFIX: this used to call supabase.channel(...) on EVERY keystroke, which
+  // created a new (never-subscribed) channel object each time — a memory leak,
+  // and the broadcast never actually reached anyone.
   const broadcastTyping=useCallback((isTyping)=>{
-    supabase.channel(`typing-${ROOM_ID}`).send({type:"broadcast",event:"typing",payload:{userId:me.id,userName:me.name,isTyping}});
+    typingCh.current?.send({type:"broadcast",event:"typing",payload:{userId:me.id,userName:me.name,isTyping}});
   },[me.id,me.name]);
 
   const handleInputChange=(e)=>{
@@ -1026,29 +1097,48 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   // ── Send message ──
   const sendMsg=async()=>{
     if(!input.trim())return;
-    // Check if user is still allowed
-    const {data:statusCheck}=await supabase.from("users").select("status").eq("id",me.id).single();
-    if(statusCheck&&(statusCheck.status==="blocked"||statusCheck.status==="kicked")){
-      onLeave(statusCheck.status);
+    // Phase 7 — rate limit
+    if(!await rateLimit(me.id,"message")){
+      showToast("Slow down a little ✦");
       return;
     }
-    const text=filterMsg(input.trim(),blockedWordsList);
-    setInput("");
-    broadcastTyping(false);
-    await supabase.from("messages").insert({room_id:ROOM_ID,user_id:me.id,text,type:"text",reactions:{}});
+    try{
+      // Check if user is still allowed
+      const {data:statusCheck}=await supabase.from("users").select("status").eq("id",me.id).single();
+      if(statusCheck&&(statusCheck.status==="blocked"||statusCheck.status==="kicked")){
+        onLeave(statusCheck.status);
+        return;
+      }
+      const text=filterMsg(input.trim(),blockedWordsList);
+      setInput("");
+      broadcastTyping(false);
+      const {error}=await supabase.from("messages").insert({room_id:ROOM_ID,user_id:me.id,text,type:"text",reactions:{}});
+      if(error)throw error;
+    }catch(e){
+      logError("sendMsg",e,{user_id:me.id,table_id:tableId});
+      showToast("Message failed — try again");
+    }
   };
 
   // ── Send image ──
   const sendImage=async(file)=>{
     if(!file)return;
+    // Phase 7 — reject oversized uploads before they burn storage/egress
+    if(file.size>5*1024*1024){showToast("Photo too large (max 5MB)");return;}
+    if(!await rateLimit(me.id,"image")){showToast("Too many photos — wait a moment ✦");return;}
     showToast("Uploading image…");
-    const ext=file.name.split(".").pop();
-    const path=`${ROOM_ID}/${randomId()}.${ext}`;
-    const {error}=await supabase.storage.from("chat-images").upload(path,file);
-    if(error){showToast("Upload failed — try again");return;}
-    const {data:{publicUrl}}=supabase.storage.from("chat-images").getPublicUrl(path);
-    await supabase.from("messages").insert({room_id:ROOM_ID,user_id:me.id,image_url:publicUrl,type:"image",reactions:{}});
-    showToast("Photo shared ✦");
+    try{
+      const ext=file.name.split(".").pop();
+      const path=`${ROOM_ID}/${randomId()}.${ext}`;
+      const {error}=await supabase.storage.from("chat-images").upload(path,file);
+      if(error){showToast("Upload failed — try again");throw error;}
+      const {data:{publicUrl}}=supabase.storage.from("chat-images").getPublicUrl(path);
+      const {error:ie}=await supabase.from("messages").insert({room_id:ROOM_ID,user_id:me.id,image_url:publicUrl,type:"image",reactions:{}});
+      if(ie)throw ie;
+      showToast("Photo shared ✦");
+    }catch(e){
+      logError("sendImage",e,{user_id:me.id,table_id:tableId});
+    }
   };
 
   // ── Toggle reaction ──
@@ -1072,12 +1162,9 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   const visibleUsers=users.filter(u=>!blockedIds.includes(u.id)&&u.status!=="offline");
   const visibleMsgs=messages.filter(m=>!blockedIds.includes(m.user_id));
 
-  // Inner component to access CartContext inside ChatRoom
-  function ReceiptDisplay(){
-    const ctx = hasTable ? useCart() : null;
-    if(!ctx?.showReceipt) return null;
-    return <ReceiptPopup receipt={ctx.showReceipt} onClose={()=>ctx.setShowReceipt(null)}/>;
-  }
+  // Phase 7 fix — useCart() must be called unconditionally, at the top level.
+  // CartContext defaults to null, so this is safe even with no table / no provider.
+  const cart = useCart();
 
   return(
     <div style={{height:"100dvh",display:"flex",flexDirection:"column",background:BG,overflow:"hidden",position:"fixed",inset:0}} onClick={()=>showEmoji&&setShowEmoji(false)}>
@@ -1212,7 +1299,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
               <button onClick={e=>{e.stopPropagation();setShowEmoji(p=>!p);}} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 9px",cursor:"pointer",fontSize:16,flexShrink:0}}>😊</button>
               <button onClick={()=>fileRef.current?.click()} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:8,padding:"8px 9px",cursor:"pointer",fontSize:14,flexShrink:0}}>📷</button>
               <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" style={{display:"none"}} onChange={e=>{sendImage(e.target.files[0]);e.target.value="";}}/>
-              <textarea ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}} placeholder="Message the room…" rows={1} style={{flex:1,padding:"8px 11px",fontSize:14,resize:"none",lineHeight:1.5,borderRadius:8,maxHeight:80,overflowY:"auto"}}/>
+              <textarea ref={inputRef} value={input} onChange={handleInputChange} onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendMsg();}}} placeholder="Message the room…" rows={1} maxLength={500} style={{flex:1,padding:"8px 11px",fontSize:14,resize:"none",lineHeight:1.5,borderRadius:8,maxHeight:80,overflowY:"auto"}}/>
               <button className="btn-gold" onClick={sendMsg} style={{padding:"8px 14px",fontSize:13,flexShrink:0,borderRadius:8}}>Send</button>
             </div>
           </div>
@@ -1277,7 +1364,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
           {v:"more",   icon:"•••",label:"More"},
         ].map(({v,icon,label})=>{
           const isActive = mobileTab===v;
-          const cartBadge = v==="cart" && hasTable ? (useCart()?.cartCount||0) : 0;
+          const cartBadge = v==="cart" && hasTable ? (cart?.cartCount||0) : 0;
           return(
             <button key={v} onClick={()=>{
               if(v==="menu_tab"){setShowMenu(true);}
@@ -1353,7 +1440,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
       {pmTarget&&<PMPanel target={pmTarget} me={me} onClose={()=>{setPmTarget(null);}} notifications={{playSound,pushNotif,markDMRead}}/>}
       {selectedImg&&<ImageModal src={selectedImg} onClose={()=>setSelectedImg(null)}/>}
       {showMenu&&<MenuModal onClose={()=>setShowMenu(false)} hasTable={hasTable}/>}
-      <ReceiptDisplay/>
+      <ReceiptPopup receipt={hasTable&&cart?.showReceipt?cart.showReceipt:null} onClose={()=>cart?.setShowReceipt(null)}/>
 
       {/* In-app DM notification popups */}
       <div style={{position:"fixed",top:60,right:12,zIndex:9998,display:"flex",flexDirection:"column",gap:8,maxWidth:260,pointerEvents:"none"}}>
@@ -1387,6 +1474,7 @@ function CartProvider({children, tableId}){
   const [orderHistory, setOrderHistory] = React.useState([]);
   const [tab, setTab] = React.useState(null);
   const [showReceipt, setShowReceipt] = React.useState(null);
+  const submittingRef = React.useRef(false); // Phase 7 — double-submit lock
 
   // Load existing tab and orders on mount
   React.useEffect(()=>{
@@ -1454,9 +1542,14 @@ function CartProvider({children, tableId}){
 
   const confirmOrder = async(me, note="")=>{
     if(!cartItems.length||!tab||!me) return {success:false,error:"Nothing in cart"};
-    // Idempotency check — prevent double submit
-    const key = `order_${tab.id}_${Date.now()}`;
+    // Phase 7 — hard lock against double-submit (double tap / slow network)
+    if(submittingRef.current) return {success:false,error:"Order already sending…"};
+    submittingRef.current = true;
     try{
+      // Phase 7 — rate limit
+      if(!await rateLimit(me.id,"order")){
+        return {success:false,error:"Too many orders — please wait a moment"};
+      }
       // Create order
       const {data:order,error:oe} = await supabase.from("orders").insert({
         tab_id: tab.id,
@@ -1485,15 +1578,19 @@ function CartProvider({children, tableId}){
       const {error:ie} = await supabase.from("order_items").insert(items);
       if(ie) throw ie;
 
-      // Update tab total
+      // Tab total is now recalculated by the recalc_tab_total() DB trigger.
+      // (This used to do `total: tab.total + addedTotal` from React state, which
+      //  lost money when two guests at the same table ordered simultaneously.)
       const addedTotal = items.reduce((s,i)=>s+i.subtotal,0);
-      await supabase.from("table_tabs").update({total: (Number(tab.total)||0)+addedTotal}).eq("id",tab.id);
 
       setShowReceipt({order, items: cartItems, total: addedTotal});
       clearCart();
       return {success:true, order};
     }catch(e){
+      logError("confirmOrder",e,{user_id:me?.id,table_id:tableId});
       return {success:false, error:e.message};
+    }finally{
+      submittingRef.current = false;
     }
   };
 
@@ -1523,6 +1620,7 @@ function CartProvider({children, tableId}){
 
 // ── Receipt Popup ─────────────────────────────────────────────────────────────
 function ReceiptPopup({receipt, onClose}){
+  if(!receipt) return null; // Phase 7 — guard: no receipt, no overlay
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:600,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
       <div className="glass slide-up" style={{width:"100%",maxWidth:380,borderRadius:20,overflow:"hidden"}}>
@@ -1778,7 +1876,9 @@ function MenuModal({onClose, hasTable=false}){
   const [menuTab,setMenuTab]=useState("food");
   const [activeCat,setActiveCat]=useState(null);
   const [addedMsg,setAddedMsg]=useState("");
-  const cart = hasTable ? useCart() : null;
+  // Phase 7 fix — hooks must never be conditional; context defaults to null
+  const cartCtx = useCart();
+  const cart = hasTable ? cartCtx : null;
 
   const handleAddToCart = (item, categoryType)=>{
     if(!cart) return;
@@ -2083,20 +2183,32 @@ function AdminMenuEditor(){
 }
 
 // ── Admin Panel ──────────────────────────────────────────────────────────────
-const ADMIN_PIN = "143143"; // Change this to your staff PIN
+// PHASE 7 SECURITY: the admin PIN is no longer hardcoded here (it was readable
+// in DevTools). It is verified server-side. Change it in Supabase → staff_config.
 
 function AdminLogin({onSuccess,onBack}){
   const [pin,setPin]=useState("");
   const [error,setError]=useState("");
   const [shake,setShake]=useState(false);
+  const [fails,setFails]=useState(0);
+  const [lockedUntil,setLockedUntil]=useState(0);
 
-  const tryPin=(p)=>{
-    if(p===ADMIN_PIN){onSuccess();}
+  const tryPin=async(p)=>{
+    if(lockedUntil&&Date.now()<lockedUntil){
+      setError(`Locked. Wait ${Math.ceil((lockedUntil-Date.now())/1000)}s.`);
+      setPin("");
+      return;
+    }
+    const ok = await verifyStaffPin("admin",p);
+    if(ok){setFails(0);setLockedUntil(0);onSuccess();}
     else{
-      setError("Incorrect PIN");
+      const n=fails+1;
+      setFails(n);
+      if(n>=5){setLockedUntil(Date.now()+60000);setError("Too many attempts. Locked 60s.");}
+      else setError(`Incorrect PIN. ${5-n} left.`);
       setShake(true);
       setPin("");
-      setTimeout(()=>{setShake(false);setError("");},1500);
+      setTimeout(()=>{setShake(false);setError("");},2000);
     }
   };
   const press=(v)=>{
@@ -2651,8 +2763,18 @@ export default function App(){
   const {toasts,show:showToast}=useToast();
   const notifications=useNotifications(me);
 
+  // Phase 7 — capture any uncaught crash into error_logs
+  useEffect(()=>{
+    installErrorHandlers(()=>({user_id:me?.id||null,table_id:tableId||null}));
+  },[me,tableId]);
+
   useEffect(()=>{
     const init=async()=>{
+      // Phase 7 — staff login sends admins here with ?admin=1
+      if(new URLSearchParams(window.location.search).get("admin")==="1"){
+        setScreen("admin");
+        return;
+      }
       // Try to restore existing session
       const savedUser = await loadSession();
       if(savedUser){

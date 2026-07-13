@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { STAFF_PINS, ROLE_LABELS, ROLE_COLORS, ROLE_ICONS, saveStaffSession, supabase } from "./shared.js";
+import { STAFF_ROLES, ROLE_LABELS, ROLE_COLORS, ROLE_ICONS, saveStaffSession, supabase } from "./shared.js";
+import { verifyStaffPin } from "../lib/prod.js";
 
 const LOGO_STYLE = {
   fontFamily:"'Georgia',serif",fontSize:28,fontWeight:900,
@@ -26,8 +27,11 @@ export default function StaffLogin(){
   const [pin, setPin] = useState("");
   const [error, setError] = useState("");
   const [shake, setShake] = useState(false);
+  const [fails, setFails] = useState(0);            // Phase 7 — brute-force guard
+  const [lockedUntil, setLockedUntil] = useState(0);
 
-  const ROUTES = { kitchen:"/kitchen", bar:"/bar", cashier:"/cashier", admin:"/admin-staff" };
+  // Phase 7 — /admin-staff never existed; admin panel lives inside App at ?admin=1
+  const ROUTES = { kitchen:"/kitchen", bar:"/bar", cashier:"/cashier", admin:"/?admin=1" };
 
   const handleRoleSelect = (role) => {
     setSelectedRole(role);
@@ -43,14 +47,20 @@ export default function StaffLogin(){
   };
 
   const verifyPin = async(p) => {
-    // Try to get PIN from Supabase first, fallback to hardcoded
-    let correctPin = STAFF_PINS[selectedRole];
-    try{
-      const {data} = await supabase.from("staff_config").select("value").eq("key",`pin_${selectedRole}`).single();
-      if(data?.value) correctPin = data.value;
-    }catch(e){}
+    // Phase 7 — brute-force lockout (5 wrong PINs = 60s cooldown)
+    if(lockedUntil && Date.now() < lockedUntil){
+      const secs = Math.ceil((lockedUntil - Date.now())/1000);
+      setError(`Too many attempts. Wait ${secs}s.`);
+      setPin("");
+      return;
+    }
 
-    if(p === correctPin){
+    // Phase 7 — PIN is checked on the server; it never enters the browser bundle
+    const ok = await verifyStaffPin(selectedRole, p);
+
+    if(ok){
+      setFails(0);
+      setLockedUntil(0);
       saveStaffSession(selectedRole);
       // Log login activity
       await supabase.from("staff_activity").insert({
@@ -59,10 +69,21 @@ export default function StaffLogin(){
       }).catch(()=>{});
       navigate(ROUTES[selectedRole]);
     } else {
-      setError("Incorrect PIN. Try again.");
+      const n = fails + 1;
+      setFails(n);
+      if(n >= 5){
+        setLockedUntil(Date.now() + 60000);
+        setError("Too many attempts. Locked for 60s.");
+      } else {
+        setError(`Incorrect PIN. ${5-n} attempt${5-n===1?"":"s"} left.`);
+      }
+      await supabase.from("staff_activity").insert({
+        role:selectedRole, action:"login_failed",
+        details:{}, device_hint:navigator.userAgent.slice(0,50)
+      }).catch(()=>{});
       setShake(true);
       setPin("");
-      setTimeout(()=>{ setShake(false); setError(""); }, 1500);
+      setTimeout(()=>{ setShake(false); setError(""); }, 2000);
     }
   };
 
@@ -85,7 +106,7 @@ export default function StaffLogin(){
           <div>
             <div style={{fontSize:12,color:"#555",letterSpacing:1,textAlign:"center",marginBottom:16}}>SELECT YOUR ROLE</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-              {Object.keys(STAFF_PINS).map(role=>(
+              {STAFF_ROLES.map(role=>(
                 <button key={role} onClick={()=>handleRoleSelect(role)}
                   style={{padding:"24px 16px",background:"#0F0F0F",border:`2px solid #241E10`,borderRadius:16,cursor:"pointer",textAlign:"center",transition:"all .2s",fontFamily:"Inter,sans-serif"}}
                   onMouseEnter={e=>{e.currentTarget.style.borderColor=ROLE_COLORS[role];e.currentTarget.style.background="#161616";}}

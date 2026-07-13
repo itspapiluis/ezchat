@@ -124,20 +124,26 @@ export default function Cashier(){
   };
 
   // ── Calculations ──────────────────────────────────────────────────────────
-  const activeItems = tabItems.filter(i=>!i.voided);
-  const subtotal = activeItems.reduce((s,i)=>s+Number(i.subtotal),0);
+  // BUGFIX: peso amounts must be rounded to 2dp. Raw JS floats produce values
+  // like 1111.0949999999998, which get written straight into receipts/reports.
+  const peso = (n) => Math.round((Number(n)||0) * 100) / 100;
 
-  const totalDiscountAmt = discounts.reduce((s,d)=>{
+  const activeItems = tabItems.filter(i=>!i.voided);
+  const subtotal = peso(activeItems.reduce((s,i)=>s+Number(i.subtotal),0));
+
+  const totalDiscountAmt = peso(discounts.reduce((s,d)=>{
     if(d.type==="percent") return s + (subtotal * Number(d.value)/100);
     if(d.type==="fixed") return s + Number(d.value);
     if(d.type==="complimentary"){
-      const item = tabItems.find(i=>i.id===d.item_id);
+      // BUGFIX: was searching ALL items incl. voided ones. Comping an already
+      // voided item subtracted money that was never in the subtotal → undercharge.
+      const item = activeItems.find(i=>i.id===d.item_id);
       return s + (item?Number(item.subtotal):0);
     }
     return s;
-  },0);
+  },0));
 
-  const grandTotal = Math.max(0, subtotal - totalDiscountAmt);
+  const grandTotal = peso(Math.max(0, subtotal - totalDiscountAmt));
 
   // ── Apply Discount ────────────────────────────────────────────────────────
   const applyDiscount = async()=>{
@@ -189,8 +195,21 @@ export default function Cashier(){
   // ── Process Payment ───────────────────────────────────────────────────────
   const processPayment = async()=>{
     if(!selectedTab) return;
+    if(payProcessing) return;   // BUGFIX: re-entrancy guard (double-tap = 2 receipts)
     setPayProcessing(true);
     try{
+      // BUGFIX: a double-tap or a second cashier device could issue TWO receipts
+      // for one tab — double-counting revenue in every report. Refuse if this tab
+      // is already paid.
+      const {data:already} = await supabase
+        .from("receipts").select("id").eq("tab_id", selectedTab.id)
+        .eq("status","paid").limit(1);
+      if(already && already.length){
+        alert("This tab has already been paid — receipt already issued.");
+        setPayProcessing(false);
+        return;
+      }
+
       // Build receipt items snapshot
       const receiptItems = activeItems.map(i=>({
         name:i.item_name, qty:i.quantity,

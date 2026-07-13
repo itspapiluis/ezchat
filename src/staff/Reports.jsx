@@ -478,34 +478,43 @@ export function StaffManagement(){
   const [saving, setSaving] = useState({});
   const [saved, setSaved] = useState({});
   const [showPin, setShowPin] = useState({});
+  const [adminPin, setAdminPin] = useState("");  // Phase 7 — authorises PIN changes
 
   useEffect(()=>{ loadData(); },[]);
 
   const loadData = async()=>{
-    const [{data:cfg},{data:act}] = await Promise.all([
-      supabase.from("staff_config").select("*").in("key",["pin_kitchen","pin_bar","pin_cashier"]),
-      supabase.from("staff_activity").select("*").order("performed_at",{ascending:false}).limit(50),
-    ]);
-    if(cfg){
-      const p = {};
-      cfg.forEach(c=>{ p[c.key.replace("pin_","")]=c.value; });
-      setPins(p);
-    }
+    // Phase 7: PINs are NO LONGER readable from the browser (RLS hides pin_* rows).
+    // The fields below are write-only — type a new PIN to replace the old one.
+    const {data:act} = await supabase
+      .from("staff_activity").select("*")
+      .order("performed_at",{ascending:false}).limit(50);
     if(act) setActivity(act);
   };
 
   const savePin = async(role)=>{
     const pin = pins[role];
-    if(!pin||pin.length!==6||!/^\d{6}$/.test(pin)){
+    if(!pin||!/^\d{6}$/.test(pin)){
       alert("PIN must be exactly 6 digits");return;
     }
+    if(!/^\d{6}$/.test(adminPin)){
+      alert("Enter the current ADMIN PIN above to authorise this change.");return;
+    }
     setSaving(p=>({...p,[role]:true}));
-    await supabase.from("staff_config").upsert({key:`pin_${role}`,value:pin,updated_at:new Date().toISOString()},{onConflict:"key"});
+    const {data, error} = await supabase.rpc("set_staff_pin",{
+      p_admin_pin: adminPin,
+      p_role: role,
+      p_new_pin: pin,
+    });
     setSaving(p=>({...p,[role]:false}));
+
+    if(error || data !== true){
+      alert("PIN not changed — wrong admin PIN, or invalid format.");
+      return;
+    }
+    setPins(p=>({...p,[role]:""}));   // clear the field, never echo it back
     setSaved(p=>({...p,[role]:true}));
     setTimeout(()=>setSaved(p=>({...p,[role]:false})),2000);
-    // Log this action
-    await supabase.from("staff_activity").insert({role:"admin",action:"pin_changed",details:{role_changed:role}});
+    loadData();                        // refresh the activity log
   };
 
   const ROLES = [
@@ -517,6 +526,7 @@ export function StaffManagement(){
   const ACTION_LABELS = {
     login:"Logged in",logout:"Logged out",void:"Voided order",
     payment:"Processed payment",discount:"Applied discount",pin_changed:"Changed PIN",
+    login_failed:"Failed login attempt",
   };
 
   return(
@@ -524,6 +534,22 @@ export function StaffManagement(){
       {/* PIN Management */}
       <div style={{marginBottom:24}}>
         <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:14}}>ROLE PIN MANAGEMENT</div>
+
+        {/* Phase 7 — admin authorisation */}
+        <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+          <div style={{fontSize:12,color:"#888",marginBottom:8}}>
+            🔒 PINs are stored securely on the server and can no longer be read by the browser.
+            Enter the current <b style={{color:GOLD}}>Admin PIN</b> to authorise any change.
+          </div>
+          <input
+            type="password" inputMode="numeric" maxLength={6}
+            value={adminPin} onChange={e=>setAdminPin(e.target.value.replace(/\D/g,""))}
+            placeholder="Current admin PIN"
+            style={{width:"100%",padding:"10px 12px",background:SURFACE2,border:`1px solid ${BORDER}`,
+                    borderRadius:8,color:"#e8e0d0",fontSize:14,letterSpacing:3,fontFamily:"Inter,sans-serif"}}
+          />
+        </div>
+
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14}}>
           {ROLES.map(r=>(
             <div key={r.key} style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:14,padding:"18px 16px"}}>
@@ -536,9 +562,10 @@ export function StaffManagement(){
                   <input
                     type={showPin[r.key]?"text":"password"}
                     value={pins[r.key]||""}
-                    onChange={e=>setPins(p=>({...p,[r.key]:e.target.value}))}
+                    onChange={e=>setPins(p=>({...p,[r.key]:e.target.value.replace(/\D/g,"")}))}
+                    inputMode="numeric"
                     maxLength={6}
-                    placeholder="6-digit PIN"
+                    placeholder="New 6-digit PIN"
                     style={{width:"100%",padding:"9px 36px 9px 12px",fontSize:16,letterSpacing:showPin[r.key]?2:4,borderRadius:8,fontFamily:"monospace"}}
                   />
                   <button onClick={()=>setShowPin(p=>({...p,[r.key]:!p[r.key]}))}
@@ -576,7 +603,7 @@ export function StaffManagement(){
                 <div style={{fontSize:13,color:"#e8e0d0"}}>{ACTION_LABELS[a.action]||a.action}</div>
                 {a.details&&Object.keys(a.details).length>0&&(
                   <div style={{fontSize:11,color:"#555",marginTop:1}}>
-                    {JSON.stringify(a.details).replace(/[{}"]/g,"").replace(/,/g:" · ")}
+                    {JSON.stringify(a.details).replace(/[{}"]/g,"").replace(/,/g," · ")}
                   </div>
                 )}
               </div>

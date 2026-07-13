@@ -85,9 +85,14 @@ export function useAlertEngine(role){
       .subscribe();
 
     // Periodic checks every 2 minutes
+    let tick = 0;
     const interval = setInterval(async()=>{
-      const config = await getConfig();
-      cfg.current = config;
+      // Phase 7 — egress: thresholds almost never change. Refresh them every
+      // 30 min instead of every 2 min on every open dashboard.
+      if(tick++ % 15 === 0){
+        cfg.current = await getConfig();
+      }
+      const config = cfg.current;
 
       // Backed up orders
       const {data:pending} = await supabase
