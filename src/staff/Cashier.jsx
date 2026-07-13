@@ -65,7 +65,7 @@ export default function Cashier(){
   const [voidNote, setVoidNote] = useState("");
 
   const audioUnlocked = useRef(false);
-  const role = loadStaffSession();
+  const role = "cashier";   // BUGFIX: was loadStaffSession() — wrong role in a multi-tab setup.
   useAlertEngine(role||"cashier");
 
   useEffect(()=>{

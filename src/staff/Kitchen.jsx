@@ -57,7 +57,7 @@ export default function Kitchen(){
   const [newIds, setNewIds] = useState(new Set());
   const audioUnlocked = useRef(false);
 
-  const role = loadStaffSession();
+  const role = "kitchen";   // BUGFIX: this screen IS the kitchen. loadStaffSession() returned whichever role logged in first, so in a multi-tab setup the Bar screen could report itself as "kitchen".
   useAlertEngine(role||"kitchen");
   useEffect(()=>{
     if(role!=="kitchen"&&role!=="admin"){ navigate("/staff"); }

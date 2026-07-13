@@ -56,7 +56,7 @@ export default function Bar(){
   const [newIds, setNewIds] = useState(new Set());
   const audioUnlocked = useRef(false);
 
-  const role = loadStaffSession();
+  const role = "bar";       // BUGFIX: was loadStaffSession(), which returns the FIRST stored role — so with Kitchen open in another tab, the Bar screen identified itself as "kitchen".
   useAlertEngine(role||"bar");
   useEffect(()=>{
     if(role!=="bar"&&role!=="admin"){ navigate("/staff"); }
