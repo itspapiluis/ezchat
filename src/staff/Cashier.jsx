@@ -158,10 +158,14 @@ export default function Cashier(){
     });
     if(!error){
       await logAudit("discount_applied","discounts",selectedTab.id,{type:discType,value:discValue,reason:discReason},"cashier");
-      await supabase.from("staff_activity").insert({
-        role:"cashier", action:"discount",
-        details:{table_id:selectedTab.table_id, type:discType, value:discValue}
-      }).catch(()=>{});
+      // BUGFIX: Supabase builders have .then() but NO .catch(). Chaining .catch()
+      // threw a TypeError and aborted the discount mid-way.
+      try{
+        await supabase.from("staff_activity").insert({
+          role:"cashier", action:"discount",
+          details:{table_id:selectedTab.table_id, type:discType, value:discValue}
+        });
+      }catch(_){ /* logging must never block the cashier */ }
       await loadTabItems(selectedTab.id);
       setDiscountModal(false);
       setDiscValue("");setDiscReason("");setDiscType("percent");
@@ -244,10 +248,14 @@ export default function Cashier(){
       await logAudit("bill_paid","table_tabs",selectedTab.id,{
         total:grandTotal, payment_method:payMethod, receipt_id:receipt.id
       },"cashier");
-      await supabase.from("staff_activity").insert({
-        role:"cashier", action:"payment",
-        details:{table_id:selectedTab.table_id, total:grandTotal, method:payMethod}
-      }).catch(()=>{});
+      // BUGFIX: same .catch() TypeError — this one fired AFTER the receipt was
+      // written but BEFORE the UI cleared, so payment would appear to hang.
+      try{
+        await supabase.from("staff_activity").insert({
+          role:"cashier", action:"payment",
+          details:{table_id:selectedTab.table_id, total:grandTotal, method:payMethod}
+        });
+      }catch(_){ /* logging must never block a payment */ }
 
       setReceiptModal({...receipt, items:receiptItems});
       setPayModal(false);

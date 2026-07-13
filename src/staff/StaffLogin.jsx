@@ -62,11 +62,16 @@ export default function StaffLogin(){
       setFails(0);
       setLockedUntil(0);
       saveStaffSession(selectedRole);
-      // Log login activity
-      await supabase.from("staff_activity").insert({
-        role:selectedRole, action:"login",
-        details:{}, device_hint:navigator.userAgent.slice(0,50)
-      }).catch(()=>{});
+      // Log login activity. BUGFIX: Supabase query builders are "thenable" but
+      // are NOT real Promises — they have .then() but NO .catch(). Chaining
+      // .catch() threw "TypeError: .catch is not a function", which killed this
+      // function BEFORE navigate() ran — so a correct PIN just hung forever.
+      try{
+        await supabase.from("staff_activity").insert({
+          role:selectedRole, action:"login",
+          details:{}, device_hint:navigator.userAgent.slice(0,50)
+        });
+      }catch(_){ /* logging must never block login */ }
       navigate(ROUTES[selectedRole]);
     } else {
       const n = fails + 1;
@@ -77,10 +82,12 @@ export default function StaffLogin(){
       } else {
         setError(`Incorrect PIN. ${5-n} attempt${5-n===1?"":"s"} left.`);
       }
-      await supabase.from("staff_activity").insert({
-        role:selectedRole, action:"login_failed",
-        details:{}, device_hint:navigator.userAgent.slice(0,50)
-      }).catch(()=>{});
+      try{
+        await supabase.from("staff_activity").insert({
+          role:selectedRole, action:"login_failed",
+          details:{}, device_hint:navigator.userAgent.slice(0,50)
+        });
+      }catch(_){ /* never block the UI on a logging failure */ }
       setShake(true);
       setPin("");
       setTimeout(()=>{ setShake(false); setError(""); }, 2000);
