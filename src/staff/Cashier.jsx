@@ -196,24 +196,39 @@ export default function Cashier(){
     await loadTabItems(selectedTab.id);
   };
 
-  // ── Reopen a tab whose bill was requested ─────────────────────────────────
-  // Lets a table order "one more round" after they already asked for the bill.
-  // Only valid while the tab is still bill_requested — a PAID tab is final.
-  const reopenTab = async()=>{
-    if(!selectedTab || selectedTab.status!=="bill_requested") return;
-    const {error} = await supabase.from("table_tabs")
-      .update({status:"open", bill_requested_at:null})
-      .eq("id",selectedTab.id)
-      .eq("status","bill_requested");        // refuse if it was paid in the meantime
-    if(error){ alert("Could not reopen this tab."); return; }
-    await logAudit("tab_reopened","table_tabs",selectedTab.id,{table_id:selectedTab.table_id},"cashier");
+  // ── New Round ─────────────────────────────────────────────────────────────
+  // The table has PAID and wants to keep drinking. We do NOT reopen the settled
+  // tab — its receipt is final and must never change. We open a BRAND-NEW tab
+  // for the table. The guest's bill then shows the paid round above, and the
+  // new round below.
+  const startNewRound = async()=>{
+    if(!selectedTab || selectedTab.status!=="closed") return;
+
+    // Guard: a table may only ever have one live tab (the DB enforces this too).
+    const {data:live} = await supabase.from("table_tabs")
+      .select("id").eq("table_id",selectedTab.table_id)
+      .in("status",["open","bill_requested"]).limit(1);
+    if(live?.length){
+      alert("This table already has an open tab.");
+      loadTabs();
+      return;
+    }
+
+    const {data:fresh,error} = await supabase.from("table_tabs")
+      .insert({table_id:selectedTab.table_id, status:"open", total:0})
+      .select().single();
+    if(error||!fresh){ alert("Could not start a new round."); return; }
+
+    await logAudit("new_round","table_tabs",fresh.id,
+      {table_id:selectedTab.table_id, previous_tab:selectedTab.id},"cashier");
     try{
       await supabase.from("staff_activity").insert({
-        role:"cashier", action:"tab_reopened",
-        details:{table_id:selectedTab.table_id}
+        role:"cashier", action:"new_round",
+        details:{table_id:selectedTab.table_id, previous_tab:selectedTab.id}
       });
     }catch(_){}
-    setSelectedTab(p=>p?{...p,status:"open"}:p);
+
+    setSelectedTab(fresh);
     loadTabs();
   };
 
@@ -405,6 +420,15 @@ export default function Cashier(){
                   <div style={{fontSize:12,color:"#555"}}>Opened: {fmtTime(selectedTab.opened_at)} · {fmtDate(selectedTab.opened_at)}</div>
                 </div>
                 <div style={{display:"flex",gap:8}}>
+                  {/* PAID tabs are final. The only action left is to start a
+                      brand-new round for this table — the receipt is untouched. */}
+                  {selectedTab.status==="closed"&&(
+                    <button onClick={startNewRound}
+                      title="Table has paid but wants to keep ordering — opens a NEW tab. The paid receipt is not changed."
+                      style={{padding:"8px 16px",background:"rgba(52,211,153,0.08)",border:"1px solid rgba(52,211,153,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#34D399",fontWeight:600,fontFamily:"Inter,sans-serif"}}>
+                      ＋ New Round
+                    </button>
+                  )}
                   {selectedTab.status!=="closed"&&(
                     <>
                       <button onClick={()=>setDiscountModal(true)}
@@ -415,13 +439,6 @@ export default function Cashier(){
                         style={{padding:"8px 18px",fontSize:13,borderRadius:9}}>
                         💵 Process Payment
                       </button>
-                      {selectedTab.status==="bill_requested"&&(
-                        <button onClick={reopenTab}
-                          title="Let this table order again"
-                          style={{padding:"8px 12px",background:"rgba(52,211,153,0.06)",border:"1px solid rgba(52,211,153,0.25)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#34D399",fontFamily:"Inter,sans-serif"}}>
-                          ↺ Reopen Tab
-                        </button>
-                      )}
                       <button onClick={()=>setResetModal(true)}
                         style={{padding:"8px 12px",background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
                         Reset

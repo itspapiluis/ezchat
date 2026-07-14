@@ -1476,23 +1476,90 @@ function CartProvider({children, tableId}){
   const [showReceipt, setShowReceipt] = React.useState(null);
   const submittingRef = React.useRef(false); // Phase 7 — double-submit lock
 
+  const [pastRounds, setPastRounds] = React.useState([]);   // settled tabs, this guest only
+
+  const loadTabItems = async(tabId)=>{
+    const {data} = await supabase
+      .from("order_items")
+      .select("*, orders(user_name,created_at,status,id)")
+      .eq("tab_id", tabId)
+      .eq("voided", false)
+      .order("created_at", {ascending:true});
+    return data||[];
+  };
+
+  // Earlier rounds THIS GUEST paid for, at this table.
+  // Privacy: scoped to the guest's own user_id, so when a new group sits at C4
+  // they do NOT see what the last group spent.
+  const loadPastRounds = React.useCallback(async(userId)=>{
+    if(!userId||!tableId) return;
+    const {data:mine} = await supabase
+      .from("orders")
+      .select("tab_id")
+      .eq("user_id", userId)
+      .eq("table_id", tableId);
+    const tabIds = [...new Set((mine||[]).map(o=>o.tab_id))];
+    if(!tabIds.length){ setPastRounds([]); return; }
+
+    const {data:closed} = await supabase
+      .from("table_tabs")
+      .select("id,total,closed_at,status")
+      .in("id", tabIds)
+      .eq("status","closed")
+      .order("closed_at",{ascending:true});
+    if(!closed?.length){ setPastRounds([]); return; }
+
+    const rounds = [];
+    for(const c of closed){
+      rounds.push({ ...c, items: await loadTabItems(c.id) });
+    }
+    setPastRounds(rounds);
+  },[tableId]);
+
   // Load existing tab and orders on mount
   React.useEffect(()=>{
     if(!tableId) return;
     const init = async()=>{
       const t = await getOrCreateTab(tableId);
       setTab(t);
-      // Load existing order items for this tab
-      const {data} = await supabase
-        .from("order_items")
-        .select("*, orders(user_name,created_at,status,id)")
-        .eq("tab_id", t.id)
-        .eq("voided", false)
-        .order("created_at", {ascending:true});
-      if(data) setOrderHistory(data);
+      if(t) setOrderHistory(await loadTabItems(t.id));
     };
     init();
   },[tableId]);
+
+  // Cashier opened a new round for this table: the paid tab is FINAL and keeps
+  // its receipt. We simply pick up the fresh tab and move the settled one into
+  // the scrollable history above.
+  // Watch the table for a NEW tab being opened after this one was paid.
+  // That is the cashier hitting "New Round" — swap the guest onto it.
+  React.useEffect(()=>{
+    if(!tableId || tab?.status!=="closed") return;
+    const ch = supabase.channel(`table-newround-${tableId}`)
+      .on("postgres_changes",
+        {event:"INSERT",schema:"public",table:"table_tabs",filter:`table_id=eq.${tableId}`},
+        async payload=>{
+          if(payload.new.status!=="open") return;
+          const settled = tab;
+          // Fetch BEFORE updating state — the setState updater is not async.
+          const settledItems = await loadTabItems(settled.id);
+          setTab(payload.new);
+          setCartItems([]);
+          setOrderHistory([]);
+          // Move the settled round into the scrollable history above.
+          setPastRounds(p=>[...p,{...settled, items: settledItems}]);
+        })
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[tableId, tab?.id, tab?.status]);
+
+  const startNewRound = React.useCallback(async(userId)=>{
+    const t = await getOrCreateTab(tableId);
+    if(!t) return;
+    setTab(t);
+    setCartItems([]);
+    setOrderHistory(await loadTabItems(t.id));
+    if(userId) loadPastRounds(userId);
+  },[tableId,loadPastRounds]);
 
   // Realtime: listen for new order items on this tab
   React.useEffect(()=>{
@@ -1511,16 +1578,13 @@ function CartProvider({children, tableId}){
         })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"table_tabs",filter:`id=eq.${tab.id}`},
         payload=>{
-          // BUGFIX: when the cashier closed the tab, the guest's browser kept the
-          // DEAD tab in state. Ordering again re-used the paid tab, so the new
-          // items piled onto a bill that was already settled.
-          // Now: paid/closed → wipe the slate. The next order opens a FRESH tab.
-          if(payload.new.status==="closed"){
-            setTab(null);
-            setCartItems([]);
-            setOrderHistory([]);
-            return;
-          }
+          // The paid tab STAYS in state. It is what renders "Bill Paid — Thank
+          // You" with the guest's final total.
+          // (An earlier fix nulled the tab here. That killed the paid screen,
+          //  zeroed the bill instantly, blanked the Bill tab, and made ordering
+          //  fail with a bogus "Nothing in cart".)
+          // The swap to a fresh tab happens LAZILY, in startNewRound() below,
+          // only once the cashier opens a new round for this table.
           setTab(p=>({...p,...payload.new}));
         })
       .subscribe();
@@ -1553,7 +1617,11 @@ function CartProvider({children, tableId}){
   const clearCart = ()=>setCartItems([]);
 
   const confirmOrder = async(me, note="")=>{
-    if(!cartItems.length||!tab||!me) return {success:false,error:"Nothing in cart"};
+    // BUGFIX: these three were collapsed into one message, so a NULL TAB reported
+    // "Nothing in cart" while the cart was full. Three failures, three messages.
+    if(!cartItems.length) return {success:false,error:"Nothing in cart"};
+    if(!me)              return {success:false,error:"Please rejoin the chat first."};
+    if(!tab)             return {success:false,error:"No open tab for this table. Ask staff to start a new round."};
     // Once the bill is printed, the total is fixed. Adding items after that
     // means the cashier collects the wrong amount.
     if(tab.status==="bill_requested"){
@@ -1632,6 +1700,7 @@ function CartProvider({children, tableId}){
       confirmOrder, requestBill,
       cartTotal, cartCount, billTotal,
       orderHistory, tab, showReceipt, setShowReceipt,
+      pastRounds, loadPastRounds, startNewRound,
     }}>
       {children}
     </CartContext.Provider>
@@ -1744,7 +1813,7 @@ function CartTab({me}){
 
 // ── Bill Tab ──────────────────────────────────────────────────────────────────
 function BillTab(){
-  const {orderHistory,billTotal,requestBill,tab} = useCart();
+  const {orderHistory,billTotal,requestBill,tab,pastRounds} = useCart();
 
   const STATUS_COLOR = {
     pending:"#F59E0B",
@@ -1781,10 +1850,47 @@ function BillTab(){
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{flex:1,overflowY:"auto",padding:"12px 14px",WebkitOverflowScrolling:"touch"}}>
+
+        {/* ── Earlier rounds YOU already paid for, at this table. ──────────────
+            Each settled tab keeps its own receipt — nothing is ever deleted or
+            merged. Scoped to this guest, so a new group at the table does NOT
+            see what the previous group spent. */}
+        {pastRounds?.map((round,idx)=>(
+          <div key={`past-${round.id}`} style={{marginBottom:16,opacity:0.75}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <div style={{flex:1,height:1,background:BORDER}}/>
+              <span style={{fontSize:10,color:"#34D399",fontWeight:600,letterSpacing:1}}>
+                ✅ ROUND {idx+1} · PAID
+              </span>
+              <div style={{flex:1,height:1,background:BORDER}}/>
+            </div>
+            <div style={{background:"rgba(52,211,153,0.04)",border:"1px solid rgba(52,211,153,0.15)",borderRadius:12,padding:"10px 12px"}}>
+              {round.items?.map(item=>(
+                <div key={item.id} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 0"}}>
+                  <span style={{fontSize:12,color:"#888",flex:1}}>{item.quantity}× {item.item_name}</span>
+                  <span style={{fontSize:12,color:"#888"}}>{fmtPrice(item.subtotal)}</span>
+                </div>
+              ))}
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`1px solid ${BORDER}`}}>
+                <span style={{fontSize:12,color:"#34D399",fontWeight:600}}>Paid</span>
+                <span style={{fontSize:13,color:"#34D399",fontWeight:700}}>{fmtPrice(round.total)}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {pastRounds?.length>0&&orders.length>0&&(
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
+            <div style={{flex:1,height:1,background:BORDER}}/>
+            <span style={{fontSize:10,color:GOLD,fontWeight:600,letterSpacing:1}}>CURRENT ROUND</span>
+            <div style={{flex:1,height:1,background:BORDER}}/>
+          </div>
+        )}
+
         {orders.length===0?(
           <div style={{textAlign:"center",padding:40,color:"#444"}}>
             <div style={{fontSize:40,marginBottom:10}}>🧾</div>
-            <div style={{fontSize:14}}>No orders yet</div>
+            <div style={{fontSize:14}}>{pastRounds?.length?"No orders in this round yet":"No orders yet"}</div>
           </div>
         ):orders.map(order=>(
           <div key={order.id} style={{marginBottom:14}}>
