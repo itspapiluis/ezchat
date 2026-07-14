@@ -3,7 +3,16 @@ import { supabase } from "./lib/supabase.js";
 import { logError, installErrorHandlers, rateLimit, verifyStaffPin } from "./lib/prod.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const LOGO_SRC = "https://fmnptbqlvyujgmmjttcu.supabase.co/storage/v1/object/public/chat-images/ezcart%20logo.jpg";
+// EGRESS FIX: the logo used to be served from SUPABASE STORAGE. It appears on
+// 8+ screens, so every guest on every page load pulled it from Supabase — and it
+// blew through the Cached Egress quota (8.9 GB against a 5 GB limit; the database
+// itself was only using 27%).
+//
+// Now it is served by VERCEL's CDN from /public. Vercel bandwidth is free and
+// generous, and Supabase egress for the logo drops to ZERO.
+//
+// The file must exist at:  public/logo.jpg
+const LOGO_SRC = "/logo.jpg";
 const GOLD = "#C9A84C";
 const GOLD_LIGHT = "#E8C96A";
 const GOLD_DIM = "#8A6A28";
