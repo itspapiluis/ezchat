@@ -2972,6 +2972,19 @@ function AdminPanel({onLogout}){
       )}
 
       {/* ── STAFF MANAGEMENT ── */}
+      {/* BUGFIX: Daily and Backup were rendered OUTSIDE the scrollable content
+          container, so the empty container still took up flex:1 and pushed them
+          far down the page — that big blank gap above "BACKUP & EXPORT". */}
+      {tab==="daily"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={DailySummaryComponent}/>
+        </div>
+      )}
+      {tab==="backup"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={BackupComponent}/>
+        </div>
+      )}
       {tab==="staff"&&(
         <div style={{maxWidth:960,margin:"0 auto"}}>
           <Suspensed C={StaffMgmtComponent}/>
@@ -2986,8 +2999,6 @@ function AdminPanel({onLogout}){
       )}
 
       {/* ── SETTINGS ── */}
-      {tab==="daily"&&<Suspensed C={DailySummaryComponent}/>}
-      {tab==="backup"&&<Suspensed C={BackupComponent}/>}
       {tab==="settings"&&(
         <div style={{maxWidth:700,margin:"0 auto"}}>
           <div className="glass" style={{borderRadius:14,padding:20,marginBottom:16}}>
