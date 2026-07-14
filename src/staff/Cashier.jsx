@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   supabase, fmtTime, fmtDate, fmtPrice,
   playAlert, loadStaffSession, clearStaffSession,
-  PAYMENT_METHODS, VOID_REASONS, logAudit, ConnectionBanner } from "./shared.js";
+  PAYMENT_METHODS, VOID_REASONS, logAudit, ConnectionBanner, TABLE_LIST } from "./shared.js";
 import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
@@ -52,6 +52,11 @@ export default function Cashier(){
   const [payMethod, setPayMethod] = useState("cash");
   const [payRef, setPayRef] = useState("");
   const [payProcessing, setPayProcessing] = useState(false);
+  // PHASE 9
+  const [splitMode, setSplitMode]   = useState(false);   // pay only selected items
+  const [splitSel, setSplitSel]     = useState([]);      // order_item ids
+  const [moveModal, setMoveModal]   = useState(false);
+  const [moveTarget, setMoveTarget] = useState("");
 
   // Discount state
   const [discType, setDiscType] = useState("percent");
@@ -127,7 +132,12 @@ export default function Cashier(){
   // like 1111.0949999999998, which get written straight into receipts/reports.
   const peso = (n) => Math.round((Number(n)||0) * 100) / 100;
 
-  const activeItems = tabItems.filter(i=>!i.voided);
+  // BUGFIX (Phase 9): this used to be just `!i.voided`. After a SPLIT payment,
+  // the already-paid items were still counted here — so "Process Payment" would
+  // charge the table a SECOND time for the portion one guest had already
+  // settled. Anything with a paid_receipt_id is done and must be excluded from
+  // every total.
+  const activeItems = tabItems.filter(i=>!i.voided && !i.paid_receipt_id);
   const subtotal = peso(activeItems.reduce((s,i)=>s+Number(i.subtotal),0));
 
   const totalDiscountAmt = peso(discounts.reduce((s,d)=>{
@@ -147,6 +157,12 @@ export default function Cashier(){
   // ── Apply Discount ────────────────────────────────────────────────────────
   const applyDiscount = async()=>{
     if(!discValue && discType!=="complimentary") return;
+    // Same reasoning in reverse: part of this tab is already paid and its
+    // receipt is final. A discount now could only apply to what is left.
+    if(tabItems.some(i=>i.paid_receipt_id)){
+      alert("Part of this tab is already paid. A discount can only be applied before any payment is taken.");
+      return;
+    }
     const {error} = await supabase.from("discounts").insert({
       tab_id: selectedTab.id,
       table_id: selectedTab.table_id,
@@ -229,6 +245,69 @@ export default function Cashier(){
 
     setSelectedTab(fresh);
     loadTabs();
+  };
+
+  // ── PHASE 9: split the bill ───────────────────────────────────────────────
+  // Two friends, one tab. Pick the items one person is paying for; the rest of
+  // the tab stays open for the others. Each split gets its own real receipt.
+  const splitTotal = tabItems
+    .filter(i=>splitSel.includes(i.id) && !i.voided && !i.paid_receipt_id)
+    .reduce((s,i)=>s+Number(i.subtotal),0);
+
+  const paySplit = async()=>{
+    if(!selectedTab || !splitSel.length) return;
+    if(payProcessing) return;
+    // A tab-wide discount can't be meaningfully divided across a split without
+    // guessing whose share it belongs to. Rather than silently mis-charge
+    // someone, refuse and let the cashier decide.
+    if(discounts.length){
+      alert("Remove the discount before splitting, or take the whole bill in one payment.\n\nA tab-wide discount can't be fairly divided between people.");
+      return;
+    }
+    setPayProcessing(true);
+    try{
+      const {data:res, error} = await supabase.rpc("pay_tab_partial",{
+        p_tab_id:         selectedTab.id,
+        p_item_ids:       splitSel,
+        p_discount_amt:   0,
+        p_discount_note:  null,
+        p_payment_method: payMethod,
+        p_payment_ref:    payRef||"",
+      });
+      if(error) throw error;
+      if(!res?.ok) throw new Error(res?.error||"Split payment failed.");
+
+      setReceiptModal({...res.receipt, items:res.receipt.items});
+      setSplitSel([]);
+      setSplitMode(false);
+      setPayModal(false);
+      if(res.tab_closed){
+        setSelectedTab(null); setTabItems([]); setDiscounts([]);
+      }else{
+        await loadTabItems(selectedTab.id);
+      }
+      await loadTabs();
+    }catch(e){
+      alert("Split payment error: "+(e.message||e));
+    }finally{
+      setPayProcessing(false);
+    }
+  };
+
+  // ── PHASE 9: move a tab to another table ──────────────────────────────────
+  const doMoveTab = async()=>{
+    if(!selectedTab || !moveTarget) return;
+    const {data:res, error} = await supabase.rpc("move_tab",{
+      p_tab_id: selectedTab.id, p_new_table: moveTarget,
+    });
+    if(error || !res?.ok){
+      alert(res?.error || error?.message || "Could not move the tab.");
+      return;
+    }
+    setMoveModal(false);
+    setMoveTarget("");
+    setSelectedTab(p=>p?{...p,table_id:res.to}:p);
+    await loadTabs();
   };
 
   // ── Process Payment ───────────────────────────────────────────────────────
@@ -424,6 +503,16 @@ export default function Cashier(){
                   )}
                   {selectedTab.status!=="closed"&&(
                     <>
+                      <button onClick={()=>{setSplitMode(m=>!m);setSplitSel([]);}}
+                        title="Pay for only some of the items — the rest of the tab stays open"
+                        style={{padding:"8px 14px",background:splitMode?"rgba(96,165,250,0.15)":"rgba(96,165,250,0.06)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#60A5FA",fontFamily:"Inter,sans-serif"}}>
+                        {splitMode?"✕ Cancel Split":"🧾 Split Bill"}
+                      </button>
+                      <button onClick={()=>setMoveModal(true)}
+                        title="Guests changed seats — move this tab to another table"
+                        style={{padding:"8px 14px",background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#A855F7",fontFamily:"Inter,sans-serif"}}>
+                        ↔ Move
+                      </button>
                       <button onClick={()=>setDiscountModal(true)}
                         style={{padding:"8px 14px",background:`rgba(201,168,76,0.08)`,border:`1px solid ${GOLD_DIM}`,borderRadius:9,cursor:"pointer",fontSize:13,color:GOLD,fontFamily:"Inter,sans-serif"}}>
                         🏷️ Discount
@@ -465,8 +554,25 @@ export default function Cashier(){
                 {/* Order items */}
                 <div style={{fontSize:11,color:"#444",letterSpacing:1,marginBottom:10}}>ORDER ITEMS</div>
                 {tabItems.length===0&&<div style={{textAlign:"center",padding:32,color:"#444",fontSize:13}}>No items ordered yet</div>}
-                {tabItems.map(item=>(
-                  <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:6,background:item.voided?`rgba(248,113,113,0.04)`:SURFACE,border:`1px solid ${item.voided?"rgba(248,113,113,0.15)":BORDER}`,borderRadius:10,opacity:item.voided?.55:1}}>
+                {tabItems.map(item=>{
+                  const isPaid = !!item.paid_receipt_id;
+                  const canSplit = splitMode && !item.voided && !isPaid;
+                  const picked = splitSel.includes(item.id);
+                  return(
+                  <div key={item.id}
+                    onClick={()=>{ if(canSplit) setSplitSel(p=>picked?p.filter(x=>x!==item.id):[...p,item.id]); }}
+                    style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",marginBottom:6,
+                      background:picked?"rgba(96,165,250,0.12)":item.voided?`rgba(248,113,113,0.04)`:SURFACE,
+                      border:`1px solid ${picked?"rgba(96,165,250,0.5)":item.voided?"rgba(248,113,113,0.15)":BORDER}`,
+                      borderRadius:10,opacity:item.voided?.55:isPaid?.5:1,
+                      cursor:canSplit?"pointer":"default"}}>
+                    {splitMode&&!item.voided&&!isPaid&&(
+                      <div style={{width:18,height:18,borderRadius:5,flexShrink:0,
+                        border:`1.5px solid ${picked?"#60A5FA":"#444"}`,background:picked?"#60A5FA":"transparent",
+                        display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff"}}>
+                        {picked?"✓":""}
+                      </div>
+                    )}
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:500,color:item.voided?"#666":"#e8e0d0",textDecoration:item.voided?"line-through":"none"}}>{item.item_name} ×{item.quantity}</div>
                       <div style={{fontSize:11,color:"#444",marginTop:1,display:"flex",gap:8}}>
@@ -475,6 +581,7 @@ export default function Cashier(){
                         <span style={{color:item.voided?"#F87171":item.status==="served"?"#888":item.status==="ready"?"#34D399":"#F59E0B"}}>
                           {item.voided?"Voided":item.status}
                         </span>
+                        {isPaid&&<><span>·</span><span style={{color:"#34D399",fontWeight:600}}>PAID</span></>}
                       </div>
                     </div>
                     <div style={{fontSize:13,fontWeight:600,color:item.voided?"#444":GOLD}}>{fmtPrice(item.subtotal)}</div>
@@ -485,12 +592,29 @@ export default function Cashier(){
                       </button>
                     )}
                   </div>
-                ))}
+                );})}
               </div>
 
               {/* Bill summary */}
               <div style={{padding:"14px 20px",borderTop:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
-                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                {splitMode&&(
+                <div style={{padding:"10px 20px",background:"rgba(96,165,250,0.08)",borderTop:"1px solid rgba(96,165,250,0.25)",display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{flex:1,fontSize:12.5,color:"#60A5FA"}}>
+                    {splitSel.length
+                      ? <><b>{splitSel.length}</b> item{splitSel.length>1?"s":""} selected · <b>{fmtPrice(splitTotal)}</b></>
+                      : "Tap the items this person is paying for"}
+                  </div>
+                  <button disabled={!splitSel.length||payProcessing}
+                    onClick={()=>setPayModal(true)}
+                    style={{padding:"8px 16px",borderRadius:9,fontSize:13,fontWeight:600,
+                      background:splitSel.length?"#60A5FA":"rgba(96,165,250,0.2)",
+                      border:"none",color:splitSel.length?"#04121f":"#557",
+                      cursor:splitSel.length?"pointer":"not-allowed",fontFamily:"Inter,sans-serif"}}>
+                    Charge {fmtPrice(splitTotal)}
+                  </button>
+                </div>
+              )}
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                   <span style={{fontSize:13,color:"#666"}}>Subtotal</span>
                   <span style={{fontSize:13,color:"#888"}}>{fmtPrice(subtotal)}</span>
                 </div>
@@ -511,6 +635,38 @@ export default function Cashier(){
       </div>
 
       {/* ── PAYMENT MODAL ── */}
+      {/* PHASE 9: move a tab to another table */}
+      {moveModal&&(
+        <div onClick={()=>setMoveModal(false)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,padding:20}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:16,padding:22,width:"100%",maxWidth:420}}>
+            <div style={{fontSize:18,fontWeight:700,color:"#A855F7",marginBottom:4}}>↔ Move Tab</div>
+            <div style={{fontSize:12.5,color:"#666",marginBottom:16}}>
+              Move Table <b style={{color:"#e8e0d0"}}>{selectedTab?.table_id}</b> and its whole bill
+              to another table. The destination must have no open tab.
+            </div>
+            <select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)}
+              style={{width:"100%",padding:"10px 12px",background:BG,border:`1px solid ${BORDER}`,borderRadius:9,color:"#e8e0d0",fontSize:14,fontFamily:"Inter,sans-serif",marginBottom:16}}>
+              <option value="">Select a table…</option>
+              {TABLE_LIST.filter(t=>t!==selectedTab?.table_id).map(t=>(
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setMoveModal(false)}
+                style={{flex:1,padding:"10px",background:"none",border:`1px solid ${BORDER}`,borderRadius:9,color:"#888",cursor:"pointer",fontSize:13,fontFamily:"Inter,sans-serif"}}>
+                Cancel
+              </button>
+              <button onClick={doMoveTab} disabled={!moveTarget}
+                style={{flex:1,padding:"10px",background:moveTarget?"#A855F7":"rgba(168,85,247,0.2)",border:"none",borderRadius:9,color:moveTarget?"#fff":"#666",cursor:moveTarget?"pointer":"not-allowed",fontSize:13,fontWeight:600,fontFamily:"Inter,sans-serif"}}>
+                Move Tab
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {payModal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:420,width:"100%"}}>
@@ -544,7 +700,7 @@ export default function Cashier(){
 
             <div style={{display:"flex",gap:10,marginTop:8}}>
               <button className="btn-ghost" onClick={()=>setPayModal(false)} style={{flex:1,padding:12,fontSize:14,borderRadius:9}}>Cancel</button>
-              <button className="btn-gold" onClick={processPayment} disabled={payProcessing}
+              <button className="btn-gold" onClick={splitMode?paySplit:processPayment} disabled={payProcessing}
                 style={{flex:2,padding:12,fontSize:14,borderRadius:9,opacity:payProcessing?.7:1}}>
                 {payProcessing?"Processing…":"Confirm Payment ✦"}
               </button>

@@ -472,6 +472,114 @@ export function VoidReports(){
 }
 
 // ── STAFF MANAGEMENT TAB ──────────────────────────────────────────────────────
+// ── PHASE 9: DAILY SUMMARY (the Z-report) ────────────────────────────────────
+// The one number you need at the end of the night: what came in, how it was
+// paid, and what was given away. Computed by the database, not the browser, so
+// it always matches the receipts.
+function SummaryRow({label,value,color,big}){
+  return(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:big?"12px 0":"7px 0",borderBottom:`1px solid ${BORDER}`}}>
+      <span style={{fontSize:big?15:13,color:big?"#e8e0d0":"#888",fontWeight:big?600:400}}>{label}</span>
+      <span style={{fontSize:big?20:14,fontWeight:big?700:600,color:color||"#e8e0d0",fontFamily:big?"'Playfair Display',serif":"Inter,sans-serif"}}>{value}</span>
+    </div>
+  );
+}
+
+export function DailySummary(){
+  const [date,setDate] = useState(new Date().toISOString().slice(0,10));
+  const [data,setData] = useState(null);
+  const [loading,setLoading] = useState(false);
+
+  const load = async(d)=>{
+    setLoading(true);
+    const {data:res,error} = await supabase.rpc("daily_summary",{p_date:d});
+    setData(error?null:res);
+    setLoading(false);
+  };
+  useEffect(()=>{ load(date); },[date]);
+
+  const P = n => "₱"+Number(n||0).toLocaleString("en-PH",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+  return(
+    <div style={{maxWidth:760,margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+        <div style={{fontSize:11,color:GOLD,letterSpacing:1,flex:1}}>DAILY SUMMARY · Z-REPORT</div>
+        <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+          style={{padding:"7px 10px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:8,color:"#e8e0d0",fontSize:13,fontFamily:"Inter,sans-serif"}}/>
+        <button onClick={()=>load(date)}
+          style={{padding:"7px 12px",background:"rgba(201,168,76,0.08)",border:`1px solid ${GOLD_DIM}`,borderRadius:8,color:GOLD,fontSize:13,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+          ↻ Refresh
+        </button>
+      </div>
+
+      {loading&&<div style={{padding:30,textAlign:"center",color:"#555",fontSize:13}}>Loading…</div>}
+
+      {!loading&&data&&(
+        <>
+          <div style={{background:SURFACE,border:`1px solid ${GOLD_DIM}55`,borderRadius:14,padding:"6px 18px 14px",marginBottom:14}}>
+            <SummaryRow label="Gross sales"     value={P(data.gross)}/>
+            <SummaryRow label="Discounts given" value={"− "+P(data.discounts)} color="#F59E0B"/>
+            <SummaryRow label="NET SALES"       value={P(data.net)} color={GOLD} big/>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:12,marginBottom:14}}>
+            <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:"12px 16px"}}>
+              <div style={{fontSize:11,color:"#555",letterSpacing:1,marginBottom:8}}>PAYMENTS</div>
+              {Object.keys(data.by_payment||{}).length===0
+                ? <div style={{fontSize:13,color:"#444"}}>No sales</div>
+                : Object.entries(data.by_payment).map(([m,amt])=>(
+                    <div key={m} style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+                      <span style={{fontSize:13,color:"#888",textTransform:"capitalize"}}>{m}</span>
+                      <span style={{fontSize:13,color:"#e8e0d0",fontWeight:600}}>{P(amt)}</span>
+                    </div>
+                  ))}
+            </div>
+
+            <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:"12px 16px"}}>
+              <div style={{fontSize:11,color:"#555",letterSpacing:1,marginBottom:8}}>THE NIGHT</div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+                <span style={{fontSize:13,color:"#888"}}>Receipts</span>
+                <span style={{fontSize:13,color:"#e8e0d0",fontWeight:600}}>{data.receipts}</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+                <span style={{fontSize:13,color:"#888"}}>Average bill</span>
+                <span style={{fontSize:13,color:"#e8e0d0",fontWeight:600}}>{P(data.avg_receipt)}</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+                <span style={{fontSize:13,color:"#888"}}>Tabs opened</span>
+                <span style={{fontSize:13,color:"#e8e0d0",fontWeight:600}}>{data.tabs_opened}</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0"}}>
+                <span style={{fontSize:13,color:"#F87171"}}>Voided</span>
+                <span style={{fontSize:13,color:"#F87171",fontWeight:600}}>{data.voided_items} · {P(data.voided_amount)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:"12px 16px"}}>
+            <div style={{fontSize:11,color:"#555",letterSpacing:1,marginBottom:8}}>TOP SELLERS</div>
+            {(!data.top_items||data.top_items.length===0)
+              ? <div style={{fontSize:13,color:"#444"}}>Nothing sold</div>
+              : data.top_items.map((it,i)=>(
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:i<data.top_items.length-1?`1px solid ${BORDER}`:"none"}}>
+                    <span style={{fontSize:11,color:GOLD,width:18}}>{i+1}.</span>
+                    <span style={{fontSize:13,color:"#e8e0d0",flex:1}}>{it.name}</span>
+                    <span style={{fontSize:12,color:"#666"}}>×{it.qty}</span>
+                    <span style={{fontSize:13,color:GOLD,fontWeight:600,minWidth:80,textAlign:"right"}}>{P(it.revenue)}</span>
+                  </div>
+                ))}
+          </div>
+
+          <div style={{marginTop:14,fontSize:11,color:"#444",textAlign:"center"}}>
+            Cash expected in the drawer: <b style={{color:"#e8e0d0"}}>{P((data.by_payment||{}).cash||0)}</b> — count it before you close.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 // ── PHASE 8: BACKUP / EXPORT ─────────────────────────────────────────────────
 // The free tier has NO point-in-time restore. If this project is ever lost or
 // corrupted, the menu (121 items, 23 categories), every receipt and every sale

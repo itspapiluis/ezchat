@@ -172,12 +172,27 @@ export async function logAudit(action,entity,entityId,details,performedBy){
 export function ConnectionBanner(){
   const {connected} = useConnection();
   if(connected) return null;
+  // BUGFIX: was position:fixed, which covered the dashboard header (logo and the
+  // Pending/Preparing counters). A normal block pushes the page down instead.
   return React.createElement("div", {
     style:{
-      position:"fixed", top:0, left:0, right:0, zIndex:9999,
       background:"#7F1D1D", color:"#fff", textAlign:"center",
       padding:"7px 12px", fontSize:13, fontWeight:600,
-      fontFamily:"Inter,sans-serif", letterSpacing:0.3,
+      fontFamily:"Inter,sans-serif", letterSpacing:0.3, flexShrink:0,
     }
   }, "\u26A0 Connection lost \u2014 this screen is NOT updating. Check the wifi.");
 }
+
+// ── PHASE 9: the venue's tables ──────────────────────────────────────────────
+// Single source of truth, shared by the Cashier's "Move Tab" picker.
+export const TABLE_LIST = [
+  "L1","L2","L3",
+  "R1","R2","R3","R4",
+  "C1","C2","C3","C4",
+  "D1","D2","D3","D4","D5",
+  "B1","B2","B3","B4","B5","B6","B7",
+  "M1",
+  "F1","F2","F3",
+  "KTV ROOM 1","KTV ROOM 2",
+  "SAPPHIRE","RUBY","DIAMOND",
+];

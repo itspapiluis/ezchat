@@ -1483,12 +1483,13 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
 function GuestConnectionBanner(){
   const {connected} = useConnection();
   if(connected) return null;
+  // BUGFIX: was position:fixed, which sat ON TOP of the header and hid it.
+  // A normal block element pushes the page down instead.
   return (
     <div style={{
-      position:"fixed", top:0, left:0, right:0, zIndex:9999,
       background:"#7F1D1D", color:"#fff", textAlign:"center",
       padding:"7px 12px", fontSize:12.5, fontWeight:600,
-      fontFamily:"Inter,sans-serif",
+      fontFamily:"Inter,sans-serif", flexShrink:0,
     }}>
       ⚠ Offline — orders won't send. Reconnecting…
     </div>
@@ -1718,6 +1719,30 @@ function CartProvider({children, tableId}){
 
   const clearCart = ()=>setCartItems([]);
 
+  // PHASE 9: cancel an item the kitchen/bar hasn't accepted yet.
+  // Wrong item goes in, and the only option was to hassle a staff member for a
+  // void. If it is still "pending", nobody has started making it — the guest
+  // should just be able to take it back.
+  const cancelItem = async(itemId, me)=>{
+    const {data, error} = await supabase.from("order_items")
+      .update({
+        voided:true, status:"voided",
+        void_reason:"Cancelled by guest",
+        voided_at:new Date().toISOString(),
+      })
+      .eq("id", itemId)
+      .eq("status","pending")     // refuse once the kitchen has accepted it
+      .eq("voided", false)
+      .select();
+    if(error) return {success:false,error:"Could not cancel."};
+    if(!data?.length){
+      return {success:false,error:"Too late — the kitchen has already started this."};
+    }
+    // The DB triggers recompute the tab total and the order status for us.
+    setOrderHistory(p=>p.map(i=>i.id===itemId?{...i,voided:true,status:"voided"}:i));
+    return {success:true};
+  };
+
   const confirmOrder = async(me, note="")=>{
     // BUGFIX: these three were collapsed into one message, so a NULL TAB reported
     // "Nothing in cart" while the cart was full. Three failures, three messages.
@@ -1786,15 +1811,23 @@ function CartProvider({children, tableId}){
 
   const requestBill = async()=>{
     if(!tab) return;
-    await supabase.from("table_tabs").update({
+    if(tab.status!=="open") return;          // already requested, or closed
+    if(billTotal<=0) return;                 // nothing left to pay
+    const {error} = await supabase.from("table_tabs").update({
       status:"bill_requested",
       bill_requested_at: new Date().toISOString()
-    }).eq("id",tab.id);
+    }).eq("id",tab.id).eq("status","open");  // refuse if the cashier just closed it
+    if(error) logError("requestBill",error,{table_id:tableId});
   };
 
   const cartTotal = cartItems.reduce((s,i)=>s+(i.item_price*i.quantity),0);
   const cartCount = cartItems.reduce((s,i)=>s+i.quantity,0);
-  const billTotal = orderHistory.filter(i=>!i.voided).reduce((s,i)=>s+Number(i.subtotal),0);
+  // BUGFIX (Phase 9): after someone at the table pays for part of the bill
+  // (a split), those items are settled. The guest's "Total Bill" must show what
+  // is STILL OWED, not the whole tab again.
+  const billTotal = orderHistory
+    .filter(i=>!i.voided && !i.paid_receipt_id)
+    .reduce((s,i)=>s+Number(i.subtotal),0);
 
   return(
     <CartContext.Provider value={{
@@ -1802,7 +1835,7 @@ function CartProvider({children, tableId}){
       confirmOrder, requestBill,
       cartTotal, cartCount, billTotal,
       orderHistory, tab, showReceipt, setShowReceipt,
-      pastRounds, loadPastRounds, startNewRound,
+      pastRounds, loadPastRounds, startNewRound, cancelItem,
     }}>
       {children}
     </CartContext.Provider>
@@ -1918,7 +1951,16 @@ function CartTab({me}){
 
 // ── Bill Tab ──────────────────────────────────────────────────────────────────
 function BillTab(){
-  const {orderHistory,billTotal,requestBill,tab,pastRounds} = useCart();
+  const {orderHistory,billTotal,requestBill,tab,pastRounds,cancelItem} = useCart();
+  const [cancelling,setCancelling] = useState(null);
+
+  const doCancel = async(item)=>{
+    if(!window.confirm(`Cancel "${item.item_name}"? It hasn't been started yet.`)) return;
+    setCancelling(item.id);
+    const r = await cancelItem(item.id);
+    setCancelling(null);
+    if(!r.success) alert(r.error);
+  };
 
   const STATUS_COLOR = {
     pending:"#F59E0B",
@@ -2009,7 +2051,23 @@ function BillTab(){
                   <div style={{fontSize:13,color:item.voided?"#666":"#e8e0d0",textDecoration:item.voided?"line-through":"none"}}>{item.item_name} ×{item.quantity}</div>
                   <div style={{fontSize:10,color:STATUS_COLOR[item.status]||"#555",marginTop:1}}>{STATUS_LABEL[item.status]||item.status}</div>
                 </div>
-                <div style={{fontSize:13,fontWeight:600,color:item.voided?"#555":GOLD,flexShrink:0}}>{fmtPrice(item.subtotal)}</div>
+                <div style={{fontSize:13,fontWeight:600,color:item.voided?"#555":item.paid_receipt_id?"#34D399":GOLD,flexShrink:0}}>
+                  {fmtPrice(item.subtotal)}
+                </div>
+                {item.paid_receipt_id&&(
+                  <span style={{marginLeft:8,fontSize:10,color:"#34D399",fontWeight:700,letterSpacing:0.5,flexShrink:0}}>PAID</span>
+                )}
+                {/* PHASE 9: only while it is still "pending" — once the kitchen
+                    accepts it, someone is already cooking it. */}
+                {!item.voided && !item.paid_receipt_id && item.status==="pending" && tab?.status==="open" && (
+                  <button onClick={()=>doCancel(item)} disabled={cancelling===item.id}
+                    style={{marginLeft:8,padding:"3px 9px",background:"rgba(248,113,113,0.08)",
+                      border:"1px solid rgba(248,113,113,0.3)",borderRadius:7,color:"#F87171",
+                      fontSize:11,cursor:"pointer",fontFamily:"Inter,sans-serif",flexShrink:0,
+                      opacity:cancelling===item.id?0.4:1}}>
+                    {cancelling===item.id?"…":"Cancel"}
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -2490,6 +2548,7 @@ const AnalyticsComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>
 const VoidComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.VoidReports/>})));
 const StaffMgmtComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.StaffManagement/>})));
 const BackupComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.BackupPanel/>})));
+const DailySummaryComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.DailySummary/>})));
 const AlertsComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.AdminAlerts/>})));
 
 const Suspensed = ({C})=>(
@@ -2694,7 +2753,7 @@ function AdminPanel({onLogout}){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
-        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["backup","💾 Backup"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["daily","🧾 Daily"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["backup","💾 Backup"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -2927,6 +2986,7 @@ function AdminPanel({onLogout}){
       )}
 
       {/* ── SETTINGS ── */}
+      {tab==="daily"&&<Suspensed C={DailySummaryComponent}/>}
       {tab==="backup"&&<Suspensed C={BackupComponent}/>}
       {tab==="settings"&&(
         <div style={{maxWidth:700,margin:"0 auto"}}>
