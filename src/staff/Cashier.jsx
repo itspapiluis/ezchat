@@ -377,14 +377,28 @@ export default function Cashier(){
   };
 
   // ── Reset Table ───────────────────────────────────────────────────────────
+  // PHASE 10 — CLOSE TABLE (the guests got up and left).
+  // This is the ONLY thing that cuts off their phones. Paying does not, because
+  // a table that pays and orders another round is completely normal and must
+  // stay frictionless. Only staff know when the seats actually empty.
+  //
+  // It refuses to close a table that still owes money — that would be walking a bill.
   const resetTable = async()=>{
-    await supabase.from("table_tabs").update({
-      status:"closed", closed_at:new Date().toISOString(), closed_by:"cashier"
-    }).eq("id",selectedTab.id);
-    await logAudit("table_reset","table_tabs",selectedTab.id,{},"cashier");
+    if(!selectedTab) return;
+    const {data:res, error} = await supabase.rpc("close_table",{
+      p_table_id: selectedTab.table_id,
+    });
+    if(error || !res?.ok){
+      alert(res?.error || error?.message || "Could not close this table.");
+      setResetModal(false);
+      return;
+    }
+    await logAudit("table_closed","table_sessions",selectedTab.table_id,
+      {epoch:res.epoch},"cashier");
     setResetModal(false);
     setSelectedTab(null);
     setTabItems([]);
+    setDiscounts([]);
     await loadTabs();
   };
 
@@ -523,7 +537,7 @@ export default function Cashier(){
                       </button>
                       <button onClick={()=>setResetModal(true)}
                         style={{padding:"8px 12px",background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
-                        Reset
+                        🔒 Close Table
                       </button>
                     </>
                   )}
@@ -786,9 +800,18 @@ export default function Cashier(){
       {resetModal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:340,width:"100%",textAlign:"center"}}>
-            <div style={{fontSize:32,marginBottom:12}}>🔄</div>
-            <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Reset Table {selectedTab?.table_id}?</div>
-            <div style={{fontSize:13,color:"#555",marginBottom:22,lineHeight:1.6}}>This will close the current tab without payment. Use only if the table is empty or guests left without paying.</div>
+            <div style={{fontSize:32,marginBottom:12}}>🔒</div>
+            <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Close Table {selectedTab?.table_id}?</div>
+            <div style={{fontSize:13,color:"#555",marginBottom:12,lineHeight:1.6}}>
+              Use this when the guests have <b style={{color:"#e8e0d0"}}>got up and left</b>.
+            </div>
+            <div style={{fontSize:12,color:"#888",marginBottom:22,lineHeight:1.6,background:"rgba(201,168,76,0.06)",border:`1px solid ${GOLD_DIM}44`,borderRadius:10,padding:"10px 12px",textAlign:"left"}}>
+              Their phones will be <b style={{color:GOLD}}>locked out</b> of this table, so they can't
+              order onto the next group's bill. The next guests scan the QR and get a clean slate.
+              <br/><br/>
+              <span style={{color:"#666"}}>If they're still sitting there and just want another round,
+              use <b style={{color:"#34D399"}}>＋ New Round</b> instead — don't close the table.</span>
+            </div>
             <div style={{display:"flex",gap:10}}>
               <button className="btn-ghost" onClick={()=>setResetModal(false)} style={{flex:1,padding:11,fontSize:14,borderRadius:9}}>Cancel</button>
               <button onClick={resetTable}

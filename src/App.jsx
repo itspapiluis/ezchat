@@ -52,6 +52,24 @@ function getTableFromURL(){
   }catch(e){return null;}
 }
 
+// PHASE 10: which "seating" of this table are we in?
+// Staff bump this when the guests leave, which locks out their old phones.
+function getSessionEpoch(){
+  try{
+    const raw = localStorage.getItem(SESSION_KEY);
+    if(!raw) return null;
+    const s = JSON.parse(raw);
+    return s.epoch ?? null;
+  }catch(_){ return null; }
+}
+
+async function getTableEpoch(tableId){
+  if(!tableId) return null;
+  const {data} = await supabase
+    .from("table_sessions").select("epoch").eq("table_id", tableId).maybeSingle();
+  return data?.epoch ?? 1;
+}
+
 // Get or create open tab for this table
 async function getOrCreateTab(tableId){
   // BUGFIX 1: this only matched status="open". Once a table requested the bill
@@ -125,12 +143,17 @@ function getDeviceFingerprint(){
   return Math.abs(hash).toString(36);
 }
 
-function saveSession(user){
+function saveSession(user, tableId, epoch){
   try{
     localStorage.setItem(SESSION_KEY, JSON.stringify({
       userId: user.id,
       fingerprint: getDeviceFingerprint(),
       savedAt: new Date().toISOString(),
+      // PHASE 10: which SEATING of this table we belong to. When staff close the
+      // table, the epoch bumps and this phone is locked out — so a guest who
+      // paid and went home cannot order onto the next group's bill.
+      tableId: tableId || null,
+      epoch: epoch ?? null,
     }));
   }catch(e){}
 }
@@ -582,7 +605,7 @@ function Entry({onEnter,wifiOk,tableId}){
         type:"system"
       });
       // Save session to localStorage + fingerprint
-      saveSession(data);
+      saveSession(data, tableId, await getTableEpoch(tableId));
       onEnter(data);
     }catch(e){
       setError("Connection error. Check your Wi-Fi and try again.");
@@ -1612,6 +1635,41 @@ function CartProvider({children, tableId}){
   const tabRef = React.useRef(null);
   React.useEffect(()=>{ tabRef.current = tab; },[tab]);
 
+  // PHASE 10 — TABLE HANDOVER.
+  // The QR is a bearer token: a guest who paid and went home still has ?table=C4
+  // in their browser. Without this, their next order would land on whoever is
+  // sitting at C4 now. (My "New Round" listener made it worse — it silently
+  // moved them onto the new group's tab.)
+  //
+  // Paying does NOT lock them out — a table ordering another round is normal and
+  // must stay frictionless. Staff tapping CLOSE TABLE does, because only staff
+  // know the guests actually left.
+  const [tableHandedOver, setTableHandedOver] = React.useState(false);
+
+  React.useEffect(()=>{
+    if(!tableId) return;
+    let dead = false;
+
+    const check = async()=>{
+      const mine = getSessionEpoch();
+      if(mine == null) return;                 // joined before this existed — let them be
+      const current = await getTableEpoch(tableId);
+      if(!dead && current != null && current !== mine) setTableHandedOver(true);
+    };
+    check();
+
+    const ch = supabase.channel(`table-session-${tableId}`)
+      .on("postgres_changes",
+        {event:"UPDATE",schema:"public",table:"table_sessions",filter:`table_id=eq.${tableId}`},
+        payload=>{
+          const mine = getSessionEpoch();
+          if(mine != null && payload.new?.epoch !== mine) setTableHandedOver(true);
+        })
+      .subscribe();
+
+    return()=>{ dead = true; supabase.removeChannel(ch); };
+  },[tableId]);
+
   // Safety net: realtime can drop a message (phone sleeps, wifi blips, tab
   // backgrounded). Never leave a guest stranded on a stale bill — re-check the
   // real tab state whenever they come back to the screen.
@@ -1650,7 +1708,9 @@ function CartProvider({children, tableId}){
           }
 
           // A brand-new OPEN tab appeared for this table = cashier hit "New Round".
-          if(row.status === "open" && (!cur || row.id !== cur.id)){
+          // PHASE 10: but NOT if staff have handed the table to a new group —
+          // that new tab belongs to them, not to us.
+          if(row.status === "open" && !tableHandedOver && (!cur || row.id !== cur.id)){
             if(cur && cur.status === "closed"){
               const settledItems = await loadTabItems(cur.id);
               setPastRounds(p =>
@@ -1749,6 +1809,11 @@ function CartProvider({children, tableId}){
     if(!cartItems.length) return {success:false,error:"Nothing in cart"};
     if(!me)              return {success:false,error:"Please rejoin the chat first."};
     if(!tab)             return {success:false,error:"No open tab for this table. Ask staff to start a new round."};
+    // PHASE 10: staff handed this table to someone else. This phone must not be
+    // able to order onto the new group's bill.
+    if(tableHandedOver){
+      return {success:false,error:"This table has been closed. Please scan the QR code again to start a new order."};
+    }
     // Once the bill is printed, the total is fixed. Adding items after that
     // means the cashier collects the wrong amount.
     if(tab.status==="bill_requested"){
@@ -1835,7 +1900,7 @@ function CartProvider({children, tableId}){
       confirmOrder, requestBill,
       cartTotal, cartCount, billTotal,
       orderHistory, tab, showReceipt, setShowReceipt,
-      pastRounds, loadPastRounds, startNewRound, cancelItem,
+      pastRounds, loadPastRounds, startNewRound, cancelItem, tableHandedOver,
     }}>
       {children}
     </CartContext.Provider>
@@ -1951,7 +2016,7 @@ function CartTab({me}){
 
 // ── Bill Tab ──────────────────────────────────────────────────────────────────
 function BillTab(){
-  const {orderHistory,billTotal,requestBill,tab,pastRounds,cancelItem} = useCart();
+  const {orderHistory,billTotal,requestBill,tab,pastRounds,cancelItem,tableHandedOver} = useCart();
   const [cancelling,setCancelling] = useState(null);
 
   const doCancel = async(item)=>{
@@ -2079,7 +2144,13 @@ function BillTab(){
           <span style={{fontSize:15,fontWeight:600,color:"#e8e0d0"}}>Total Bill</span>
           <span style={{fontSize:20,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(billTotal)}</span>
         </div>
-        {tab?.status==="closed"?(
+        {tableHandedOver?(
+          <div style={{textAlign:"center",padding:"14px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.35)",borderRadius:12}}>
+            <div style={{fontSize:20,marginBottom:4}}>🔒</div>
+            <div style={{fontSize:14,color:"#F59E0B",fontWeight:600}}>This table has been closed</div>
+            <div style={{fontSize:12,color:"#666",marginTop:3}}>Scan the QR code again to start a new order</div>
+          </div>
+        ):tab?.status==="closed"?(
           <div style={{textAlign:"center",padding:"14px 0",background:"rgba(52,211,153,0.06)",border:"1px solid rgba(52,211,153,0.25)",borderRadius:12}}>
             <div style={{fontSize:20,marginBottom:4}}>✅</div>
             <div style={{fontSize:14,color:"#34D399",fontWeight:600}}>Bill Paid — Thank You!</div>
@@ -2092,6 +2163,12 @@ function BillTab(){
           <div style={{textAlign:"center",padding:"12px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:12}}>
             <div style={{fontSize:14,color:"#F59E0B",fontWeight:600}}>⏳ Bill Requested</div>
             <div style={{fontSize:12,color:"#666",marginTop:3}}>Staff will be with you shortly</div>
+          </div>
+        ):billTotal<=0?(
+          /* Nothing ordered yet — asking for a bill would just confuse the staff. */
+          <div style={{textAlign:"center",padding:"12px 0",background:SURFACE,border:`1px dashed ${BORDER}`,borderRadius:12}}>
+            <div style={{fontSize:13,color:"#888",fontWeight:600}}>Nothing to bill yet</div>
+            <div style={{fontSize:12,color:"#555",marginTop:3}}>Add something from the menu first 🍻</div>
           </div>
         ):(
           <button onClick={requestBill} style={{width:"100%",padding:13,fontSize:15,background:`linear-gradient(135deg,${GOLD_DIM},${GOLD})`,border:"none",borderRadius:10,color:"#080808",fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
