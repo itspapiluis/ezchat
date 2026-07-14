@@ -1530,27 +1530,72 @@ function CartProvider({children, tableId}){
   // Cashier opened a new round for this table: the paid tab is FINAL and keeps
   // its receipt. We simply pick up the fresh tab and move the settled one into
   // the scrollable history above.
-  // Watch the table for a NEW tab being opened after this one was paid.
-  // That is the cashier hitting "New Round" — swap the guest onto it.
+  // ONE channel for the whole TABLE, not for a single tab id.
+  //
+  // BUGFIX: the guest used to subscribe with filter `id=eq.${tab.id}`. That
+  // subscription had to be torn down and rebuilt every time the tab changed
+  // (bill paid → new round). On round 2 the rebuild missed, so the guest never
+  // heard that their bill was paid — the screen sat on "Bill Requested" forever
+  // even though the cashier had closed the tab and issued a receipt.
+  //
+  // Filtering by table_id instead means one durable channel catches EVERY tab
+  // event for this table — closes, reopens, new rounds — no matter how many.
+  const tabRef = React.useRef(null);
+  React.useEffect(()=>{ tabRef.current = tab; },[tab]);
+
+  // Safety net: realtime can drop a message (phone sleeps, wifi blips, tab
+  // backgrounded). Never leave a guest stranded on a stale bill — re-check the
+  // real tab state whenever they come back to the screen.
   React.useEffect(()=>{
-    if(!tableId || tab?.status!=="closed") return;
-    const ch = supabase.channel(`table-newround-${tableId}`)
+    if(!tableId) return;
+    const resync = async()=>{
+      if(document.hidden) return;
+      const cur = tabRef.current;
+      if(!cur) return;
+      const {data} = await supabase
+        .from("table_tabs").select("*").eq("id",cur.id).maybeSingle();
+      if(data && data.status !== cur.status) setTab(p=>({...p,...data}));
+    };
+    document.addEventListener("visibilitychange",resync);
+    window.addEventListener("focus",resync);
+    return()=>{
+      document.removeEventListener("visibilitychange",resync);
+      window.removeEventListener("focus",resync);
+    };
+  },[tableId]);
+
+  React.useEffect(()=>{
+    if(!tableId) return;
+    const ch = supabase.channel(`table-tabs-${tableId}`)
       .on("postgres_changes",
-        {event:"INSERT",schema:"public",table:"table_tabs",filter:`table_id=eq.${tableId}`},
+        {event:"*",schema:"public",table:"table_tabs",filter:`table_id=eq.${tableId}`},
         async payload=>{
-          if(payload.new.status!=="open") return;
-          const settled = tab;
-          // Fetch BEFORE updating state — the setState updater is not async.
-          const settledItems = await loadTabItems(settled.id);
-          setTab(payload.new);
-          setCartItems([]);
-          setOrderHistory([]);
-          // Move the settled round into the scrollable history above.
-          setPastRounds(p=>[...p,{...settled, items: settledItems}]);
+          const row = payload.new;
+          if(!row) return;
+          const cur = tabRef.current;
+
+          // An update to the tab we're already on (bill requested, paid, etc.)
+          if(cur && row.id === cur.id){
+            setTab(p=>({...p,...row}));
+            return;
+          }
+
+          // A brand-new OPEN tab appeared for this table = cashier hit "New Round".
+          if(row.status === "open" && (!cur || row.id !== cur.id)){
+            if(cur && cur.status === "closed"){
+              const settledItems = await loadTabItems(cur.id);
+              setPastRounds(p =>
+                p.some(r=>r.id===cur.id) ? p : [...p,{...cur, items:settledItems}]
+              );
+            }
+            setTab(row);
+            setCartItems([]);
+            setOrderHistory(await loadTabItems(row.id));
+          }
         })
       .subscribe();
     return()=>supabase.removeChannel(ch);
-  },[tableId, tab?.id, tab?.status]);
+  },[tableId]);
 
   const startNewRound = React.useCallback(async(userId)=>{
     const t = await getOrCreateTab(tableId);
@@ -1575,17 +1620,6 @@ function CartProvider({children, tableId}){
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"order_items",filter:`tab_id=eq.${tab.id}`},
         payload=>{
           setOrderHistory(p=>p.map(i=>i.id===payload.new.id?{...i,...payload.new}:i));
-        })
-      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"table_tabs",filter:`id=eq.${tab.id}`},
-        payload=>{
-          // The paid tab STAYS in state. It is what renders "Bill Paid — Thank
-          // You" with the guest's final total.
-          // (An earlier fix nulled the tab here. That killed the paid screen,
-          //  zeroed the bill instantly, blanked the Bill tab, and made ordering
-          //  fail with a bogus "Nothing in cart".)
-          // The swap to a fresh tab happens LAZILY, in startNewRound() below,
-          // only once the cashier opens a new round for this table.
-          setTab(p=>({...p,...payload.new}));
         })
       .subscribe();
     return()=>supabase.removeChannel(ch);
