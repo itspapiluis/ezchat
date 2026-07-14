@@ -3,8 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   supabase, fmtTime, fmtDate, fmtPrice,
   playAlert, loadStaffSession, clearStaffSession,
-  PAYMENT_METHODS, VOID_REASONS, logAudit
-} from "./shared.js";
+  PAYMENT_METHODS, VOID_REASONS, logAudit, ConnectionBanner } from "./shared.js";
 import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
@@ -322,6 +321,7 @@ export default function Cashier(){
 
   return(
     <div style={{height:"100dvh",background:BG,display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={()=>audioUnlocked.current=true}>
+      <ConnectionBanner/>
       <style>{CSS}</style>
 
       {/* Top bar */}

@@ -472,6 +472,114 @@ export function VoidReports(){
 }
 
 // ── STAFF MANAGEMENT TAB ──────────────────────────────────────────────────────
+// ── PHASE 8: BACKUP / EXPORT ─────────────────────────────────────────────────
+// The free tier has NO point-in-time restore. If this project is ever lost or
+// corrupted, the menu (121 items, 23 categories), every receipt and every sale
+// goes with it. This is the only backup that exists. Run it weekly.
+export function BackupPanel(){
+  const [busy,setBusy] = useState(false);
+  const [msg,setMsg] = useState("");
+
+  const TABLES = [
+    "menu_categories","menu_items","staff_config",
+    "table_tabs","orders","order_items","receipts",
+    "discounts","void_logs","audit_logs","staff_activity",
+  ];
+
+  const exportAll = async()=>{
+    setBusy(true); setMsg("Exporting…");
+    const dump = { exported_at:new Date().toISOString(), venue:"EasyCart Barcade & Lounge", tables:{} };
+    for(const t of TABLES){
+      try{
+        const {data,error} = await supabase.from(t).select("*");
+        if(error){ dump.tables[t] = {error:error.message}; continue; }
+        dump.tables[t] = data||[];
+      }catch(e){ dump.tables[t] = {error:String(e)}; }
+    }
+    const blob = new Blob([JSON.stringify(dump,null,2)],{type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ezchat-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    const counts = Object.entries(dump.tables)
+      .map(([k,v])=>`${k}: ${Array.isArray(v)?v.length:"ERR"}`).join(" · ");
+    setMsg("✅ Downloaded. "+counts);
+    setBusy(false);
+  };
+
+  const exportReceiptsCSV = async()=>{
+    setBusy(true); setMsg("Exporting receipts…");
+    const {data} = await supabase.from("receipts").select("*")
+      .eq("status","paid").order("issued_at",{ascending:true});
+    const rows = data||[];
+    const head = ["id","table_id","subtotal","discount_amt","total","payment_method","payment_ref","issued_at"];
+    const csv = [head.join(",")].concat(
+      rows.map(r=>head.map(h=>{
+        const v = r[h]==null?"":String(r[h]);
+        const needsQuote = v.includes(",") || v.includes('"') || v.includes("\n");
+        return needsQuote ? '"'+v.replace(/"/g,'""')+'"' : v;
+      }).join(","))
+    ).join("\n");
+    const blob = new Blob([csv],{type:"text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ezchat-receipts-${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setMsg(`✅ ${rows.length} receipts exported.`);
+    setBusy(false);
+  };
+
+  return(
+    <div style={{maxWidth:900,margin:"0 auto"}}>
+      <div style={{fontSize:11,color:GOLD,letterSpacing:1,marginBottom:14}}>BACKUP & EXPORT</div>
+
+      <div style={{background:"rgba(248,113,113,0.05)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:12,padding:"12px 14px",marginBottom:16}}>
+        <div style={{fontSize:12.5,color:"#F87171",fontWeight:600,marginBottom:4}}>⚠ There is no automatic backup.</div>
+        <div style={{fontSize:12,color:"#888",lineHeight:1.5}}>
+          The free plan has no point-in-time restore. If this database is lost, your
+          menu and every sale goes with it. Download a backup <b style={{color:"#e8e0d0"}}>weekly</b>
+          {" "}and keep it somewhere off this machine.
+        </div>
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:14}}>
+        <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:14,padding:16}}>
+          <div style={{fontSize:14,fontWeight:600,color:"#e8e0d0",marginBottom:4}}>Full backup (JSON)</div>
+          <div style={{fontSize:12,color:"#666",marginBottom:12,lineHeight:1.5}}>
+            Everything: menu, categories, tabs, orders, receipts, discounts, voids, audit log.
+          </div>
+          <button className="btn-gold" disabled={busy} onClick={exportAll}
+            style={{padding:"9px 16px",fontSize:13,borderRadius:9,width:"100%",opacity:busy?0.5:1}}>
+            ⬇ Download full backup
+          </button>
+        </div>
+
+        <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:14,padding:16}}>
+          <div style={{fontSize:14,fontWeight:600,color:"#e8e0d0",marginBottom:4}}>Receipts (CSV)</div>
+          <div style={{fontSize:12,color:"#666",marginBottom:12,lineHeight:1.5}}>
+            Every paid receipt, for your books or your accountant. Opens in Excel.
+          </div>
+          <button disabled={busy} onClick={exportReceiptsCSV}
+            style={{padding:"9px 16px",fontSize:13,borderRadius:9,width:"100%",background:"rgba(201,168,76,0.08)",border:`1px solid ${GOLD_DIM}`,color:GOLD,cursor:"pointer",fontFamily:"Inter,sans-serif",opacity:busy?0.5:1}}>
+            ⬇ Download receipts CSV
+          </button>
+        </div>
+      </div>
+
+      {msg&&(
+        <div style={{marginTop:14,fontSize:12,color:"#888",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:10,padding:"10px 12px",wordBreak:"break-word"}}>
+          {msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function StaffManagement(){
   const [pins, setPins] = useState({kitchen:"",bar:"",cashier:""});
   const [activity, setActivity] = useState([]);

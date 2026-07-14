@@ -2,6 +2,7 @@
 // EZChat · Phase 7 — Production utilities
 // Error logging + client-side rate limiting
 // ============================================================
+import { useState, useEffect } from "react";
 import { supabase } from "./supabase.js";
 
 // ── Error logging ─────────────────────────────────────────────────────────────
@@ -99,4 +100,41 @@ export async function verifyStaffPin(role, pin) {
     logError("verifyStaffPin", e, { role });
     return false;
   }
+}
+
+// ── PHASE 8: connection awareness ────────────────────────────────────────────
+// A venue's wifi WILL blip mid-service. Before this, an order would just fail
+// silently and nobody — guest or staff — would know the app had gone deaf.
+// This exposes one honest boolean: are we actually connected right now?
+
+export function useConnection(){
+  const [online, setOnline] = useState(
+    typeof navigator === "undefined" ? true : navigator.onLine
+  );
+  const [realtime, setRealtime] = useState(true);
+
+  useEffect(()=>{
+    const up = ()=>setOnline(true);
+    const down = ()=>setOnline(false);
+    window.addEventListener("online", up);
+    window.addEventListener("offline", down);
+
+    // Watch the realtime socket itself — the browser can be "online" while the
+    // websocket is dead, which is the failure mode that actually bites.
+    const ch = supabase.channel("conn-probe")
+      .subscribe(status=>{
+        if(status === "SUBSCRIBED") setRealtime(true);
+        if(status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED"){
+          setRealtime(false);
+        }
+      });
+
+    return()=>{
+      window.removeEventListener("online", up);
+      window.removeEventListener("offline", down);
+      supabase.removeChannel(ch);
+    };
+  },[]);
+
+  return { connected: online && realtime, online, realtime };
 }

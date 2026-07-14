@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
-import { logError, installErrorHandlers, rateLimit, verifyStaffPin } from "./lib/prod.js";
+import { logError, installErrorHandlers, rateLimit, verifyStaffPin, useConnection } from "./lib/prod.js";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // EGRESS FIX: the logo used to be served from SUPABASE STORAGE. It appears on
@@ -1132,14 +1132,20 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   // ── Send image ──
   const sendImage=async(file)=>{
     if(!file)return;
-    // Phase 7 — reject oversized uploads before they burn storage/egress
-    if(file.size>5*1024*1024){showToast("Photo too large (max 5MB)");return;}
+    if(file.size>15*1024*1024){showToast("Photo too large (max 15MB)");return;}
     if(!await rateLimit(me.id,"image")){showToast("Too many photos — wait a moment ✦");return;}
     showToast("Uploading image…");
     try{
-      const ext=file.name.split(".").pop();
-      const path=`${ROOM_ID}/${randomId()}.${ext}`;
-      const {error}=await supabase.storage.from("chat-images").upload(path,file);
+      // PHASE 8 — compress BEFORE upload.
+      // A phone shoots ~4000px / 3-5MB. Chat renders it at ~300px. Every one of
+      // those bytes was billed twice: once on upload, and again on download for
+      // EVERY guest in the room. One 3MB photo seen by 60 people = 180MB of
+      // egress. That is what blew the Supabase quota (8.9GB against a 5GB cap).
+      // 1600px @ q0.8 is visually identical on a phone and ~12x smaller.
+      const compressed = await compressImage(file, 1600, 0.8);
+      const path=`${ROOM_ID}/${randomId()}.jpg`;
+      const {error}=await supabase.storage.from("chat-images")
+        .upload(path, compressed, {contentType:"image/jpeg", cacheControl:"31536000"});
       if(error){showToast("Upload failed — try again");throw error;}
       const {data:{publicUrl}}=supabase.storage.from("chat-images").getPublicUrl(path);
       const {error:ie}=await supabase.from("messages").insert({room_id:ROOM_ID,user_id:me.id,image_url:publicUrl,type:"image",reactions:{}});
@@ -1471,6 +1477,59 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
 }
 
 
+// ── PHASE 8: offline banner (guest) ──────────────────────────────────────────
+// If the wifi drops, a guest could tap "Confirm Order" and get nothing. Better
+// they see the truth than think the kitchen has their food.
+function GuestConnectionBanner(){
+  const {connected} = useConnection();
+  if(connected) return null;
+  return (
+    <div style={{
+      position:"fixed", top:0, left:0, right:0, zIndex:9999,
+      background:"#7F1D1D", color:"#fff", textAlign:"center",
+      padding:"7px 12px", fontSize:12.5, fontWeight:600,
+      fontFamily:"Inter,sans-serif",
+    }}>
+      ⚠ Offline — orders won't send. Reconnecting…
+    </div>
+  );
+}
+
+// ── PHASE 8: client-side image compression ───────────────────────────────────
+// Downscale + re-encode in the browser before anything touches the network.
+// Falls back to the original file if anything goes wrong — never block a guest
+// from sharing a photo just because compression failed.
+function compressImage(file, maxDim=1600, quality=0.8){
+  return new Promise(resolve=>{
+    try{
+      if(!file.type.startsWith("image/")) return resolve(file);
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = ()=>{
+        URL.revokeObjectURL(url);
+        let {width:w, height:h} = img;
+        if(w>maxDim || h>maxDim){
+          const scale = maxDim/Math.max(w,h);
+          w = Math.round(w*scale);
+          h = Math.round(h*scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(
+          blob=>resolve(blob && blob.size < file.size ? blob : file),
+          "image/jpeg",
+          quality
+        );
+      };
+      img.onerror = ()=>{ URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    }catch(_){ resolve(file); }
+  });
+}
+
 // ── Cart Context (global cart state) ─────────────────────────────────────────
 const CartContext = React.createContext(null);
 
@@ -1760,6 +1819,9 @@ function ReceiptPopup({receipt, onClose}){
           <div style={{fontSize:36,marginBottom:6}}>🎉</div>
           <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:900}} className="gold-text">Order Confirmed!</div>
           <div style={{fontSize:12,color:"#666",marginTop:4}}>Your order has been sent to the kitchen/bar</div>
+          <div style={{fontSize:11,color:GOLD,marginTop:8,background:"rgba(201,168,76,0.08)",border:`1px solid ${GOLD_DIM}55`,borderRadius:8,padding:"6px 10px"}}>
+            📸 Screenshot this for your records — receipts are not re-sent.
+          </div>
         </div>
         <div style={{padding:"14px 20px",maxHeight:260,overflowY:"auto"}}>
           {receipt.items.map((item,i)=>(
@@ -1964,6 +2026,9 @@ function BillTab(){
             <div style={{fontSize:20,marginBottom:4}}>✅</div>
             <div style={{fontSize:14,color:"#34D399",fontWeight:600}}>Bill Paid — Thank You!</div>
             <div style={{fontSize:12,color:"#666",marginTop:3}}>Hope to see you again at EasyCart!</div>
+            <div style={{fontSize:11,color:"#888",marginTop:8,paddingTop:8,borderTop:`1px solid ${BORDER}`}}>
+              📸 Screenshot your bill if you need a copy — it cannot be re-sent later.
+            </div>
           </div>
         ):billRequested?(
           <div style={{textAlign:"center",padding:"12px 0",background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:12}}>
@@ -2424,6 +2489,7 @@ const ReportComponents = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({
 const AnalyticsComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.Analytics/>})));
 const VoidComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.VoidReports/>})));
 const StaffMgmtComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.StaffManagement/>})));
+const BackupComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.BackupPanel/>})));
 const AlertsComponent = React.lazy(()=>import("./staff/Reports.jsx").then(m=>({default:()=><m.AdminAlerts/>})));
 
 const Suspensed = ({C})=>(
@@ -2628,7 +2694,7 @@ function AdminPanel({onLogout}){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
-        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["backup","💾 Backup"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -2861,6 +2927,7 @@ function AdminPanel({onLogout}){
       )}
 
       {/* ── SETTINGS ── */}
+      {tab==="backup"&&<Suspensed C={BackupComponent}/>}
       {tab==="settings"&&(
         <div style={{maxWidth:700,margin:"0 auto"}}>
           <div className="glass" style={{borderRadius:14,padding:20,marginBottom:16}}>
@@ -2990,6 +3057,7 @@ export default function App(){
   return(
     <>
       <style>{CSS}</style>
+      <GuestConnectionBanner/>
       {screen==="loading"&&<Loading label="CONNECTING…" sub={`Checking ${VENUE_WIFI}`}/>}
       {screen==="landing"&&<Landing onJoin={()=>setScreen("entry")} onAdminTap={tapLogo} tableId={tableId}/>}
       {screen==="entry"&&<Entry onEnter={user=>{setMe(user);setScreen("chat");}} wifiOk={wifiOk} tableId={tableId}/>}

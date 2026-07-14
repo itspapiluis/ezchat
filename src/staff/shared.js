@@ -1,4 +1,6 @@
+import React from "react";
 import { supabase } from "../lib/supabase.js";
+import { useConnection } from "../lib/prod.js";
 export { supabase };
 
 // ── Staff PINs ────────────────────────────────────────────────────────────────
@@ -161,4 +163,21 @@ export async function logAudit(action,entity,entityId,details,performedBy){
   }catch(e){
     console.warn("audit log failed:",e?.message||e);
   }
+}
+
+// ── PHASE 8: offline banner (staff) ──────────────────────────────────────────
+// Venue wifi drops mid-service. Staff MUST know their screen has gone stale —
+// otherwise they keep working from a ticket list that stopped updating minutes
+// ago. Written with React.createElement because this is a .js file (no JSX).
+export function ConnectionBanner(){
+  const {connected} = useConnection();
+  if(connected) return null;
+  return React.createElement("div", {
+    style:{
+      position:"fixed", top:0, left:0, right:0, zIndex:9999,
+      background:"#7F1D1D", color:"#fff", textAlign:"center",
+      padding:"7px 12px", fontSize:13, fontWeight:600,
+      fontFamily:"Inter,sans-serif", letterSpacing:0.3,
+    }
+  }, "\u26A0 Connection lost \u2014 this screen is NOT updating. Check the wifi.");
 }
