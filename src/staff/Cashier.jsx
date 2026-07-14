@@ -238,17 +238,8 @@ export default function Cashier(){
     if(payProcessing) return;   // BUGFIX: re-entrancy guard (double-tap = 2 receipts)
     setPayProcessing(true);
     try{
-      // BUGFIX: a double-tap or a second cashier device could issue TWO receipts
-      // for one tab — double-counting revenue in every report. Refuse if this tab
-      // is already paid.
-      const {data:already} = await supabase
-        .from("receipts").select("id").eq("tab_id", selectedTab.id)
-        .eq("status","paid").limit(1);
-      if(already && already.length){
-        alert("This tab has already been paid — receipt already issued.");
-        setPayProcessing(false);
-        return;
-      }
+      // No pre-check needed: pay_tab() locks the tab, refuses a second receipt,
+      // and RECOVERS a tab that was left half-paid by the old two-step code.
 
       // Build receipt items snapshot
       const receiptItems = activeItems.map(i=>({
@@ -257,29 +248,28 @@ export default function Cashier(){
         category:i.category_type, status:i.status,
       }));
 
-      // Create receipt
-      const {data:receipt,error:re} = await supabase.from("receipts").insert({
-        tab_id: selectedTab.id,
-        table_id: selectedTab.table_id,
-        items: receiptItems,
-        subtotal: subtotal,
-        discount_amt: totalDiscountAmt,
-        discount_note: discounts.map(d=>`${d.type}${d.type!=="complimentary"?" "+d.value:""}`).join(", ")||null,
-        total: grandTotal,
-        payment_method: payMethod,
-        payment_ref: payRef||null,
-        issued_by: "cashier",
-        status: "paid",
-      }).select().single();
-      if(re) throw re;
+      // BUGFIX: this used to INSERT the receipt, then separately UPDATE the tab
+      // to closed — and it never checked the update's error. When the close
+      // failed, the money was taken but the tab stayed in "Bill Requested", and
+      // retrying just said "already paid". A half-finished payment.
+      //
+      // pay_tab() does both in ONE database transaction: either the receipt is
+      // created AND the tab closes, or nothing happens. It also self-heals a tab
+      // that is already stuck in that state.
+      const {data:res, error:pe} = await supabase.rpc("pay_tab",{
+        p_tab_id:         selectedTab.id,
+        p_items:          receiptItems,
+        p_subtotal:       subtotal,
+        p_discount_amt:   totalDiscountAmt,
+        p_discount_note:  discounts.map(d=>`${d.type}${d.type!=="complimentary"?" "+d.value:""}`).join(", ")||null,
+        p_total:          grandTotal,
+        p_payment_method: payMethod,
+        p_payment_ref:    payRef||"",
+      });
+      if(pe) throw pe;
+      if(!res?.ok) throw new Error(res?.error||"Payment failed.");
 
-      // Update tab status
-      await supabase.from("table_tabs").update({
-        status:"closed",
-        closed_at:new Date().toISOString(),
-        receipt_id:receipt.id,
-        total:grandTotal,
-      }).eq("id",selectedTab.id);
+      const receipt = res.receipt;
 
       await logAudit("bill_paid","table_tabs",selectedTab.id,{
         total:grandTotal, payment_method:payMethod, receipt_id:receipt.id
@@ -300,9 +290,12 @@ export default function Cashier(){
       setDiscounts([]);
       await loadTabs();
     }catch(e){
-      alert("Payment error: "+e.message);
+      alert("Payment error: "+(e.message||e));
+    }finally{
+      // BUGFIX: was outside a finally — an early return left the button stuck
+      // on "Processing…" forever.
+      setPayProcessing(false);
     }
-    setPayProcessing(false);
   };
 
   // ── Reset Table ───────────────────────────────────────────────────────────
