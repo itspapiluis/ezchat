@@ -196,6 +196,27 @@ export default function Cashier(){
     await loadTabItems(selectedTab.id);
   };
 
+  // ── Reopen a tab whose bill was requested ─────────────────────────────────
+  // Lets a table order "one more round" after they already asked for the bill.
+  // Only valid while the tab is still bill_requested — a PAID tab is final.
+  const reopenTab = async()=>{
+    if(!selectedTab || selectedTab.status!=="bill_requested") return;
+    const {error} = await supabase.from("table_tabs")
+      .update({status:"open", bill_requested_at:null})
+      .eq("id",selectedTab.id)
+      .eq("status","bill_requested");        // refuse if it was paid in the meantime
+    if(error){ alert("Could not reopen this tab."); return; }
+    await logAudit("tab_reopened","table_tabs",selectedTab.id,{table_id:selectedTab.table_id},"cashier");
+    try{
+      await supabase.from("staff_activity").insert({
+        role:"cashier", action:"tab_reopened",
+        details:{table_id:selectedTab.table_id}
+      });
+    }catch(_){}
+    setSelectedTab(p=>p?{...p,status:"open"}:p);
+    loadTabs();
+  };
+
   // ── Process Payment ───────────────────────────────────────────────────────
   const processPayment = async()=>{
     if(!selectedTab) return;
@@ -394,6 +415,13 @@ export default function Cashier(){
                         style={{padding:"8px 18px",fontSize:13,borderRadius:9}}>
                         💵 Process Payment
                       </button>
+                      {selectedTab.status==="bill_requested"&&(
+                        <button onClick={reopenTab}
+                          title="Let this table order again"
+                          style={{padding:"8px 12px",background:"rgba(52,211,153,0.06)",border:"1px solid rgba(52,211,153,0.25)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#34D399",fontFamily:"Inter,sans-serif"}}>
+                          ↺ Reopen Tab
+                        </button>
+                      )}
                       <button onClick={()=>setResetModal(true)}
                         style={{padding:"8px 12px",background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
                         Reset

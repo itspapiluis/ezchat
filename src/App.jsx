@@ -1510,7 +1510,19 @@ function CartProvider({children, tableId}){
           setOrderHistory(p=>p.map(i=>i.id===payload.new.id?{...i,...payload.new}:i));
         })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"table_tabs",filter:`id=eq.${tab.id}`},
-        payload=>setTab(p=>({...p,...payload.new})))
+        payload=>{
+          // BUGFIX: when the cashier closed the tab, the guest's browser kept the
+          // DEAD tab in state. Ordering again re-used the paid tab, so the new
+          // items piled onto a bill that was already settled.
+          // Now: paid/closed → wipe the slate. The next order opens a FRESH tab.
+          if(payload.new.status==="closed"){
+            setTab(null);
+            setCartItems([]);
+            setOrderHistory([]);
+            return;
+          }
+          setTab(p=>({...p,...payload.new}));
+        })
       .subscribe();
     return()=>supabase.removeChannel(ch);
   },[tab?.id]);
@@ -1542,6 +1554,14 @@ function CartProvider({children, tableId}){
 
   const confirmOrder = async(me, note="")=>{
     if(!cartItems.length||!tab||!me) return {success:false,error:"Nothing in cart"};
+    // Once the bill is printed, the total is fixed. Adding items after that
+    // means the cashier collects the wrong amount.
+    if(tab.status==="bill_requested"){
+      return {success:false,error:"Bill already requested — please ask staff to reopen the tab."};
+    }
+    if(tab.status==="closed"){
+      return {success:false,error:"This tab is closed. Please start a new order."};
+    }
     // Phase 7 — hard lock against double-submit (double tap / slow network)
     if(submittingRef.current) return {success:false,error:"Order already sending…"};
     submittingRef.current = true;
