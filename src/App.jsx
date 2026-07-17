@@ -2819,23 +2819,23 @@ function AdminPanel({onLogout}){
   const preferCount=onlineUsers.filter(u=>u.gender==="prefer_not").length;
 
   return(
-    <div style={{height:"100dvh",display:"flex",flexDirection:"column",background:BG,overflow:"hidden"}}>
-      {/* Top bar */}
-      <div style={{padding:"0 16px",height:54,display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0}}>
+    <div style={{minHeight:"100dvh",background:BG}}>
+      {/* Top bar — sticky so it stays visible while the page scrolls */}
+      <div style={{position:"sticky",top:0,zIndex:20,padding:"0 16px",height:54,display:"flex",alignItems:"center",gap:10,borderBottom:`1px solid ${BORDER}`,background:SURFACE}}>
         <Logo size={28} showText={true}/>
         <div style={{flex:1}}/>
         <div style={{background:`rgba(201,168,76,0.08)`,border:`1px solid ${GOLD_DIM}44`,borderRadius:8,padding:"4px 12px",fontSize:11,color:GOLD,letterSpacing:.5}}>⚙️ STAFF PANEL</div>
         <button className="btn-ghost" onClick={()=>setConfirmLogout(true)} style={{padding:"5px 12px",fontSize:12}}>Logout</button>
       </div>
 
-      {/* Tabs */}
-      <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,overflowX:"auto"}}>
+      {/* Tabs — sticky under the header */}
+      <div style={{position:"sticky",top:54,zIndex:20,display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,overflowX:"auto"}}>
         {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["daily","🧾 Daily"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["backup","💾 Backup"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
 
-      <div style={{flex:1,minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:16,paddingBottom:80}}>
+      <div style={{padding:16,paddingBottom:100}}>
 
         {/* ── DASHBOARD ── */}
         {tab==="dashboard"&&(

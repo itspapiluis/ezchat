@@ -121,6 +121,11 @@ export default function Server(){
   return(
     <div style={{minHeight:"100dvh",background:BG,color:"#e8e0d0",fontFamily:"Inter,sans-serif"}}
       onClick={()=>audioUnlocked.current=true}>
+      <style>{`
+        @keyframes srvToast{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+        .srv-press{transition:transform .1s ease;-webkit-tap-highlight-color:transparent}
+        .srv-press:active{transform:scale(0.94)}
+      `}</style>
       <ConnectionBanner/>
 
       {/* header */}
@@ -275,12 +280,16 @@ function GetOrder({me,menu,onDone}){
   const [activeCat,setActiveCat]=useState(null);
   const [busy,setBusy]=useState(false);
   const [existing,setExisting]=useState(null);   // an already-open walk-in with this name
+  const [toast,setToast]=useState(null);          // {msg,kind}
+  const [flash,setFlash]=useState(null);          // menu_item_id just tapped (for animation)
+  const showToast=(msg,kind="ok")=>{ setToast({msg,kind}); setTimeout(()=>setToast(null),2200); };
 
   const cats=menu.cats;
   const itemsFor=(catId)=>menu.items.filter(i=>i.category_id===catId);
   const total=cart.reduce((s,c)=>s+c.item_price*c.qty,0);
 
   const add=(item,catType)=>{
+    setFlash(item.id); setTimeout(()=>setFlash(f=>f===item.id?null:f),260);
     setCart(prev=>{
       const ex=prev.find(c=>c.menu_item_id===item.id);
       if(ex) return prev.map(c=>c.menu_item_id===item.id?{...c,qty:c.qty+1}:c);
@@ -290,8 +299,8 @@ function GetOrder({me,menu,onDone}){
   const dec=(id)=>setCart(p=>p.map(c=>c.menu_item_id===id?{...c,qty:c.qty-1}:c).filter(c=>c.qty>0));
 
   const submit=async()=>{
-    if(!name.trim()){ alert("Enter the guest's name first."); return; }
-    if(!cart.length){ alert("Add at least one item."); return; }
+    if(!name.trim()){ showToast("Enter the guest's name first.","warn"); return; }
+    if(!cart.length){ showToast("Add at least one item.","warn"); return; }
     setBusy(true);
     try{
       // Per your decision (B): a matching open name gets ASKED, never auto-merged.
@@ -329,10 +338,10 @@ function GetOrder({me,menu,onDone}){
       const {error:ie}=await supabase.from("order_items").insert(items);
       if(ie) throw ie;
       setCart([]); setName(""); setExisting(null);
-      alert(`Order sent for ${name.trim()}.`);
+      showToast(`Order sent for ${name.trim()} \u2713`,"ok");
       onDone();
     }catch(e){
-      alert("Error: "+(e.message||e));
+      showToast((e.message||String(e)),"err");
     }finally{ setBusy(false); }
   };
 
@@ -358,7 +367,7 @@ function GetOrder({me,menu,onDone}){
       {/* category chips */}
       <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:8,marginBottom:10}}>
         {cats.map(c=>(
-          <button key={c.id} onClick={()=>setActiveCat(c.id)}
+          <button key={c.id} className="srv-press" onClick={()=>setActiveCat(c.id)}
             style={{flexShrink:0,padding:"7px 12px",borderRadius:20,fontSize:12.5,cursor:"pointer",fontFamily:"Inter,sans-serif",
               background:activeCat===c.id?PINK:SURFACE,border:`1px solid ${activeCat===c.id?PINK:BORDER}`,
               color:activeCat===c.id?"#150a10":"#aaa"}}>
@@ -371,16 +380,40 @@ function GetOrder({me,menu,onDone}){
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8,marginBottom:16}}>
         {(activeCat?itemsFor(activeCat):[]).map(item=>{
           const cat=cats.find(c=>c.id===item.category_id);
+          const inCart=cart.find(c=>c.menu_item_id===item.id);
+          const isFlash=flash===item.id;
           return(
             <button key={item.id} onClick={()=>add(item,cat?.type)}
-              style={{textAlign:"left",padding:"10px 12px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:10,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
-              <div style={{fontSize:13,color:"#e8e0d0",marginBottom:2}}>{item.name}</div>
+              style={{position:"relative",textAlign:"left",padding:"10px 12px",
+                background:isFlash?"rgba(244,114,182,0.18)":inCart?"rgba(201,168,76,0.08)":SURFACE,
+                border:`1px solid ${isFlash?PINK:inCart?GOLD:BORDER}`,borderRadius:10,cursor:"pointer",
+                fontFamily:"Inter,sans-serif",transform:isFlash?"scale(0.96)":"scale(1)",
+                transition:"transform .12s ease, background .18s, border-color .18s",WebkitTapHighlightColor:"transparent"}}>
+              <div style={{fontSize:13,color:"#e8e0d0",marginBottom:2,paddingRight:inCart?22:0}}>{item.name}</div>
               <div style={{fontSize:12,color:GOLD}}>{fmtPrice(item.price)}</div>
+              {inCart&&(
+                <div style={{position:"absolute",top:8,right:8,minWidth:18,height:18,borderRadius:9,
+                  background:GOLD,color:"#150a10",fontSize:11,fontWeight:800,display:"flex",
+                  alignItems:"center",justifyContent:"center",padding:"0 5px"}}>{inCart.qty}</div>
+              )}
             </button>
           );
         })}
         {!activeCat&&<div style={{gridColumn:"1/-1",textAlign:"center",color:"#555",fontSize:13,padding:20}}>Pick a category above</div>}
       </div>
+
+      {/* toast */}
+      {toast&&(
+        <div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:600,
+          maxWidth:"90%",padding:"11px 18px",borderRadius:12,fontSize:13.5,fontWeight:600,
+          fontFamily:"Inter,sans-serif",boxShadow:"0 8px 30px rgba(0,0,0,0.5)",
+          animation:"srvToast .25s ease",
+          background:toast.kind==="err"?"#3b1414":toast.kind==="warn"?"#3a2f12":"#12281b",
+          border:`1px solid ${toast.kind==="err"?"#7f1d1d":toast.kind==="warn"?"#8a6d1e":"#1f6b45"}`,
+          color:toast.kind==="err"?"#fca5a5":toast.kind==="warn"?"#fcd34d":"#6ee7b7"}}>
+          {toast.msg}
+        </div>
+      )}
 
       {/* cart */}
       {cart.length>0&&(
@@ -392,7 +425,7 @@ function GetOrder({me,menu,onDone}){
               <button onClick={()=>dec(c.menu_item_id)} style={{width:24,height:24,borderRadius:6,background:SURFACE2,border:`1px solid ${BORDER}`,color:"#F87171",cursor:"pointer"}}>−</button>
             </div>
           ))}
-          <button onClick={submit} disabled={busy}
+          <button onClick={submit} disabled={busy} className="srv-press"
             style={{width:"100%",marginTop:10,padding:"12px",background:PINK,border:"none",borderRadius:10,color:"#150a10",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif",opacity:busy?0.5:1}}>
             {busy?"Sending…":`Send Order · ${fmtPrice(total)}`}
           </button>
