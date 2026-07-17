@@ -32,6 +32,14 @@ input,select,textarea{background:#161616;border:1px solid #241E10;color:#e8e0d0;
 input:focus,select:focus,textarea:focus{border-color:#8A6A28}
 `;
 
+// PHASE 11: walk-in tabs store a hidden slot like "WALKIN-20260717-15" as their
+// table_id. Never show that — show the guest's NAME instead.
+function tabLabel(t){
+  if(!t) return "";
+  if(t.is_walkin) return (t.walkin_name||"Walk-in")+" · walk-in";
+  return "Table "+t.table_id;
+}
+
 export default function Cashier(){
   const navigate = useNavigate();
   const [tabs, setTabs] = useState([]);
@@ -480,7 +488,7 @@ export default function Cashier(){
                   style={{padding:"12px 14px",borderBottom:`1px solid ${BORDER}`,cursor:"pointer",background:isSelected?`rgba(201,168,76,0.08)`:SURFACE,borderLeft:`3px solid ${isSelected?CASHIER_COLOR:isBillReq?"#F87171":"transparent"}`,transition:"all .15s"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                     <div>
-                      <div style={{fontSize:15,fontWeight:700,color:isSelected?GOLD:"#e8e0d0"}}>Table {tab.table_id}</div>
+                      <div style={{fontSize:15,fontWeight:700,color:isSelected?GOLD:"#e8e0d0"}}>{tabLabel(tab)}</div>
                       <div style={{fontSize:11,color:"#555",marginTop:1}}>{fmtTime(tab.opened_at)}</div>
                     </div>
                     <div style={{textAlign:"right"}}>
@@ -506,7 +514,7 @@ export default function Cashier(){
               {/* Tab header */}
               <div style={{padding:"12px 20px",borderBottom:`1px solid ${BORDER}`,background:SURFACE,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div>
-                  <div style={{fontSize:20,fontWeight:700,color:GOLD}}>Table {selectedTab.table_id}</div>
+                  <div style={{fontSize:20,fontWeight:700,color:GOLD}}>{tabLabel(selectedTab)}</div>
                   <div style={{fontSize:12,color:"#555"}}>Opened: {fmtTime(selectedTab.opened_at)} · {fmtDate(selectedTab.opened_at)}</div>
                 </div>
                 <div style={{display:"flex",gap:8}}>
@@ -689,7 +697,7 @@ export default function Cashier(){
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:420,width:"100%"}}>
             <div style={{fontSize:18,fontWeight:700,marginBottom:4,color:GOLD}}>💵 Process Payment</div>
-            <div style={{fontSize:13,color:"#555",marginBottom:20}}>Table {selectedTab?.table_id}</div>
+            <div style={{fontSize:13,color:"#555",marginBottom:20}}>{tabLabel(selectedTab)}</div>
 
             <div style={{background:SURFACE2,borderRadius:12,padding:"14px 16px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <span style={{fontSize:15,color:"#888"}}>Amount Due</span>
@@ -732,7 +740,7 @@ export default function Cashier(){
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:400,width:"100%"}}>
             <div style={{fontSize:18,fontWeight:700,marginBottom:4,color:GOLD}}>🏷️ Apply Discount</div>
-            <div style={{fontSize:13,color:"#555",marginBottom:20}}>Table {selectedTab?.table_id}</div>
+            <div style={{fontSize:13,color:"#555",marginBottom:20}}>{tabLabel(selectedTab)}</div>
 
             <div style={{marginBottom:14}}>
               <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:8}}>DISCOUNT TYPE</label>
@@ -805,7 +813,7 @@ export default function Cashier(){
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:340,width:"100%",textAlign:"center"}}>
             <div style={{fontSize:32,marginBottom:12}}>🔒</div>
-            <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Close Table {selectedTab?.table_id}?</div>
+            <div style={{fontSize:17,fontWeight:700,marginBottom:8}}>Close {tabLabel(selectedTab)}?</div>
             <div style={{fontSize:13,color:"#555",marginBottom:12,lineHeight:1.6}}>
               Use this when the guests have <b style={{color:"#e8e0d0"}}>got up and left</b>.
             </div>

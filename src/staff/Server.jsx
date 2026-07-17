@@ -28,6 +28,8 @@ export default function Server(){
 
   const [orders,setOrders]=useState([]);          // all live orders
   const [menu,setMenu]=useState({cats:[],items:[]});
+  const [toast,setToast]=useState(null);
+  const showToast=(msg,kind="ok")=>{ setToast({msg,kind}); setTimeout(()=>setToast(null),2400); };
 
   // ── who am I ──
   useEffect(()=>{
@@ -152,8 +154,15 @@ export default function Server(){
       <div style={{padding:"14px 12px 90px",maxWidth:900,margin:"0 auto"}}>
         {tab==="mine"   && <MyTables me={me} assigned={assigned} setAssigned={setAssigned} ordersForTable={ordersForTable}/>}
         {tab==="serve"  && <ReadyToServe list={readyToServe} onServed={markServed}/>}
-        {tab==="walkin" && <GetOrder me={me} menu={menu} onDone={()=>{loadOrders();setTab("mine");}}/>}
+        {tab==="walkin" && <GetOrder me={me} menu={menu} showToast={showToast}
+                             onDone={()=>{ loadOrders(); setTimeout(()=>setTab("mine"),900); }}/>}
       </div>
+
+      {toast&&(
+        <div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:600,maxWidth:"90%",padding:"11px 18px",borderRadius:12,fontSize:13.5,fontWeight:600,fontFamily:"Inter,sans-serif",boxShadow:"0 8px 30px rgba(0,0,0,0.5)",animation:"srvToast .25s ease",background:toast.kind==="err"?"#3b1414":toast.kind==="warn"?"#3a2f12":"#12281b",border:"1px solid "+(toast.kind==="err"?"#7f1d1d":toast.kind==="warn"?"#8a6d1e":"#1f6b45"),color:toast.kind==="err"?"#fca5a5":toast.kind==="warn"?"#fcd34d":"#6ee7b7"}}>
+          {toast.msg}
+        </div>
+      )}
     </div>
   );
 }
@@ -274,18 +283,21 @@ function ReadyToServe({list,onServed}){
 }
 
 // ── GET ORDER (walk-in) ──────────────────────────────────────────────────────
-function GetOrder({me,menu,onDone}){
+function GetOrder({me,menu,onDone,showToast}){
   const [name,setName]=useState("");
   const [cart,setCart]=useState([]);
   const [activeCat,setActiveCat]=useState(null);
   const [busy,setBusy]=useState(false);
   const [existing,setExisting]=useState(null);   // an already-open walk-in with this name
-  const [toast,setToast]=useState(null);          // {msg,kind}
   const [flash,setFlash]=useState(null);          // menu_item_id just tapped (for animation)
-  const showToast=(msg,kind="ok")=>{ setToast({msg,kind}); setTimeout(()=>setToast(null),2200); };
+  const [search,setSearch]=useState("");
 
   const cats=menu.cats;
   const itemsFor=(catId)=>menu.items.filter(i=>i.category_id===catId);
+  const q=search.trim().toLowerCase();
+  const shownItems = q
+    ? menu.items.filter(i=>i.name.toLowerCase().includes(q))
+    : (activeCat?itemsFor(activeCat):[]);
   const total=cart.reduce((s,c)=>s+c.item_price*c.qty,0);
 
   const add=(item,catType)=>{
@@ -364,8 +376,13 @@ function GetOrder({me,menu,onDone}){
         placeholder="Guest's name (e.g. Marco, or 'guy in red cap')"
         style={{width:"100%",padding:"12px 14px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:10,color:"#e8e0d0",fontSize:14,fontFamily:"Inter,sans-serif",marginBottom:14}}/>
 
-      {/* category chips */}
-      <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:8,marginBottom:10}}>
+      {/* PHASE 11: search the whole menu — no scrolling category by category */}
+      <input value={search} onChange={e=>setSearch(e.target.value)}
+        placeholder="🔍 Search the menu…"
+        style={{width:"100%",padding:"11px 14px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:10,color:"#e8e0d0",fontSize:14,fontFamily:"Inter,sans-serif",marginBottom:10}}/>
+
+      {/* category chips (hidden while searching) */}
+      {!q&&<div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:8,marginBottom:10}}>
         {cats.map(c=>(
           <button key={c.id} className="srv-press" onClick={()=>setActiveCat(c.id)}
             style={{flexShrink:0,padding:"7px 12px",borderRadius:20,fontSize:12.5,cursor:"pointer",fontFamily:"Inter,sans-serif",
@@ -374,11 +391,11 @@ function GetOrder({me,menu,onDone}){
             {c.icon} {c.name}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* items */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8,marginBottom:16}}>
-        {(activeCat?itemsFor(activeCat):[]).map(item=>{
+        {shownItems.map(item=>{
           const cat=cats.find(c=>c.id===item.category_id);
           const inCart=cart.find(c=>c.menu_item_id===item.id);
           const isFlash=flash===item.id;
@@ -399,21 +416,9 @@ function GetOrder({me,menu,onDone}){
             </button>
           );
         })}
-        {!activeCat&&<div style={{gridColumn:"1/-1",textAlign:"center",color:"#555",fontSize:13,padding:20}}>Pick a category above</div>}
+        {!q&&!activeCat&&<div style={{gridColumn:"1/-1",textAlign:"center",color:"#555",fontSize:13,padding:20}}>Pick a category or search above</div>}
+        {q&&shownItems.length===0&&<div style={{gridColumn:"1/-1",textAlign:"center",color:"#555",fontSize:13,padding:20}}>No items match "{search}"</div>}
       </div>
-
-      {/* toast */}
-      {toast&&(
-        <div style={{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:600,
-          maxWidth:"90%",padding:"11px 18px",borderRadius:12,fontSize:13.5,fontWeight:600,
-          fontFamily:"Inter,sans-serif",boxShadow:"0 8px 30px rgba(0,0,0,0.5)",
-          animation:"srvToast .25s ease",
-          background:toast.kind==="err"?"#3b1414":toast.kind==="warn"?"#3a2f12":"#12281b",
-          border:`1px solid ${toast.kind==="err"?"#7f1d1d":toast.kind==="warn"?"#8a6d1e":"#1f6b45"}`,
-          color:toast.kind==="err"?"#fca5a5":toast.kind==="warn"?"#fcd34d":"#6ee7b7"}}>
-          {toast.msg}
-        </div>
-      )}
 
       {/* cart */}
       {cart.length>0&&(

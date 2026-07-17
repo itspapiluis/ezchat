@@ -249,7 +249,7 @@ export default function Bar(){
                 style={{background:SURFACE,border:`2px solid ${st.color}44`,borderRadius:16,overflow:"hidden"}}>
                 <div style={{background:`${st.color}15`,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${st.color}33`}}>
                   <div>
-                    <div style={{fontSize:18,fontWeight:700,color:st.color}}>Table {order.table_id}</div>
+                    <div style={{fontSize:18,fontWeight:700,color:st.color}}>{order.table_tabs?.is_walkin?`${order.table_tabs.walkin_name||"Walk-in"} · walk-in`:`Table ${order.table_id}`}</div>
                     <div style={{fontSize:11,color:"#888",marginTop:1}}>{fmtTime(order.created_at)} · {order.user_name}</div>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
