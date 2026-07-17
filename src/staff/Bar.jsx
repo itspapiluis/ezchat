@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase, ORDER_STATUS, VOID_REASONS, fmtTime, fmtPrice, playAlert, loadStaffSession, clearStaffSession, logAudit, ConnectionBanner } from "./shared.js";
+import { supabase, ORDER_STATUS, VOID_REASONS, fmtTime, fmtPrice, playAlert, loadStaffSession, clearStaffSession, logAudit, ConnectionBanner, VoidPinGate } from "./shared.js";
 import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
@@ -51,6 +51,7 @@ export default function Bar(){
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("active");
   const [voidModal, setVoidModal] = useState(null);
+  const [voidGate, setVoidGate] = useState(false);
   const [voidReason, setVoidReason] = useState("");
   const [voidNote, setVoidNote] = useState("");
   const [newIds, setNewIds] = useState(new Set());
@@ -143,7 +144,7 @@ export default function Bar(){
     await logAudit(`order_${action.next}`,"orders",order.id,{table_id:order.table_id},"bar");
   };
 
-  const submitVoid = async()=>{
+  const _doVoid = async()=>{
     if(!voidReason) return;
     const reason = voidNote?`${voidReason}: ${voidNote}`:voidReason;
     // BUGFIX: voids only THIS station's drinks now. It used to also mark the
@@ -183,6 +184,9 @@ export default function Bar(){
   return(
     <div style={{minHeight:"100dvh",background:BG,display:"flex",flexDirection:"column"}} onClick={unlockAudio}>
       <ConnectionBanner/>
+      <VoidPinGate open={voidGate}
+        onCancel={()=>setVoidGate(false)}
+        onOk={()=>{ setVoidGate(false); _doVoid(); }}/>
       <style>{CSS}</style>
 
       <div style={{height:56,background:SURFACE,borderBottom:`1px solid ${BORDER}`,display:"flex",alignItems:"center",padding:"0 16px",gap:12,flexShrink:0}}>
@@ -297,7 +301,7 @@ export default function Bar(){
             </div>
             <div style={{display:"flex",gap:10}}>
               <button className="btn-ghost" onClick={()=>setVoidModal(null)} style={{flex:1,padding:11,fontSize:14,borderRadius:9}}>Cancel</button>
-              <button onClick={submitVoid} disabled={!voidReason}
+              <button onClick={()=>{ if(voidReason) setVoidGate(true); }} disabled={!voidReason}
                 style={{flex:1,padding:11,fontSize:14,background:"rgba(248,113,113,0.15)",border:"1px solid rgba(248,113,113,0.4)",borderRadius:9,color:"#F87171",cursor:voidReason?"pointer":"not-allowed",fontFamily:"Inter,sans-serif",fontWeight:600,opacity:voidReason?1:0.5}}>
                 Confirm Void
               </button>

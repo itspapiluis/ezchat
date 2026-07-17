@@ -1,6 +1,6 @@
 import React from "react";
 import { supabase } from "../lib/supabase.js";
-import { useConnection } from "../lib/prod.js";
+import { useConnection, verifyVoidPin } from "../lib/prod.js";
 export { supabase };
 
 // ── Staff PINs ────────────────────────────────────────────────────────────────
@@ -196,3 +196,63 @@ export const TABLE_LIST = [
   "KTV ROOM 1","KTV ROOM 2",
   "SAPPHIRE","RUBY","DIAMOND",
 ];
+
+// ── PHASE 11: void PIN prompt (shared by Kitchen, Bar, Cashier) ──────────────
+// A tiny keypad modal. Calls onOk() only when the void PIN checks out.
+
+export function VoidPinGate({ open, onOk, onCancel }){
+  const [pin,setPin] = React.useState("");
+  const [err,setErr] = React.useState("");
+  const [busy,setBusy] = React.useState(false);
+  React.useEffect(()=>{ if(open){ setPin(""); setErr(""); } },[open]);
+  if(!open) return null;
+
+  const submit = async(p)=>{
+    setBusy(true);
+    const ok = await verifyVoidPin(p);
+    setBusy(false);
+    if(ok){ onOk(); }
+    else { setErr("Wrong void PIN"); setPin(""); }
+  };
+  const press = (v)=>{
+    if(pin.length>=6) return;
+    const n = pin+v; setPin(n);
+    if(n.length===6) setTimeout(()=>submit(n),100);
+  };
+
+  return React.createElement("div",{
+    onClick:onCancel,
+    style:{position:"fixed",inset:0,background:"rgba(0,0,0,0.8)",display:"flex",
+      alignItems:"center",justifyContent:"center",zIndex:500,padding:20}
+  },
+    React.createElement("div",{
+      onClick:e=>e.stopPropagation(),
+      style:{background:"#151510",border:"1px solid #2a2a20",borderRadius:16,
+        padding:24,width:"100%",maxWidth:300,textAlign:"center"}
+    },
+      React.createElement("div",{style:{fontSize:26,marginBottom:6}},"\uD83D\uDD12"),
+      React.createElement("div",{style:{fontSize:15,fontWeight:700,color:"#e8e0d0",marginBottom:2}},"Void Authorisation"),
+      React.createElement("div",{style:{fontSize:12,color:"#777",marginBottom:14}},"Enter the void PIN to continue"),
+      React.createElement("div",{style:{display:"flex",justifyContent:"center",gap:7,marginBottom:12}},
+        [0,1,2,3,4,5].map(i=>React.createElement("div",{key:i,style:{
+          width:11,height:11,borderRadius:"50%",
+          background:i<pin.length?"#c9a84c":"#333"}}))),
+      err && React.createElement("div",{style:{fontSize:12,color:"#F87171",marginBottom:10}},err),
+      React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}},
+        [1,2,3,4,5,6,7,8,9].map(n=>React.createElement("button",{key:n,disabled:busy,
+          onClick:()=>press(String(n)),
+          style:{padding:"14px 0",fontSize:18,background:"#1e1e16",border:"1px solid #2a2a20",
+            borderRadius:10,color:"#e8e0d0",cursor:"pointer"}},n)),
+        React.createElement("div",{key:"x"}),
+        React.createElement("button",{key:0,disabled:busy,onClick:()=>press("0"),
+          style:{padding:"14px 0",fontSize:18,background:"#1e1e16",border:"1px solid #2a2a20",
+            borderRadius:10,color:"#e8e0d0",cursor:"pointer"}},0),
+        React.createElement("button",{key:"del",onClick:()=>setPin(p=>p.slice(0,-1)),
+          style:{padding:"14px 0",fontSize:16,background:"#1e1e16",border:"1px solid #2a2a20",
+            borderRadius:10,color:"#888",cursor:"pointer"}},"\u2190")),
+      React.createElement("button",{onClick:onCancel,
+        style:{marginTop:4,padding:"8px 16px",background:"none",border:"none",
+          color:"#666",fontSize:13,cursor:"pointer"}},"Cancel")
+    )
+  );
+}

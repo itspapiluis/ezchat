@@ -138,3 +138,15 @@ export function useConnection(){
 
   return { connected: online && realtime, online, realtime };
 }
+
+// ── PHASE 11: void authorisation ─────────────────────────────────────────────
+// Voids remove money from a bill (or write off stock). They now require a PIN
+// that is SEPARATE from any login PIN — so it can be handed to a trusted senior
+// without giving away admin access.
+export async function verifyVoidPin(pin){
+  try{
+    const {data,error} = await supabase.rpc("verify_void_pin",{p_pin:pin});
+    if(error) return false;
+    return data === true;
+  }catch(_){ return false; }
+}

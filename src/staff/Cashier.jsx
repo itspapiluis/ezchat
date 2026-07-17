@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   supabase, fmtTime, fmtDate, fmtPrice,
   playAlert, loadStaffSession, clearStaffSession,
-  PAYMENT_METHODS, VOID_REASONS, logAudit, ConnectionBanner, TABLE_LIST } from "./shared.js";
+  PAYMENT_METHODS, VOID_REASONS, logAudit, ConnectionBanner, TABLE_LIST, VoidPinGate } from "./shared.js";
 import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
@@ -45,6 +45,7 @@ export default function Cashier(){
   const [payModal, setPayModal] = useState(false);
   const [discountModal, setDiscountModal] = useState(false);
   const [voidItemModal, setVoidItemModal] = useState(null);
+  const [voidGate, setVoidGate] = useState(false);
   const [receiptModal, setReceiptModal] = useState(null);
   const [resetModal, setResetModal] = useState(false);
 
@@ -193,7 +194,7 @@ export default function Cashier(){
   };
 
   // ── Void Item ─────────────────────────────────────────────────────────────
-  const submitVoidItem = async()=>{
+  const _doVoid = async()=>{
     if(!voidReason) return;
     const reason = voidNote?`${voidReason}: ${voidNote}`:voidReason;
     await supabase.from("order_items").update({
@@ -415,6 +416,9 @@ export default function Cashier(){
   return(
     <div style={{height:"100dvh",background:BG,display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={()=>audioUnlocked.current=true}>
       <ConnectionBanner/>
+      <VoidPinGate open={voidGate}
+        onCancel={()=>setVoidGate(false)}
+        onOk={()=>{ setVoidGate(false); _doVoid(); }}/>
       <style>{CSS}</style>
 
       {/* Top bar */}
@@ -787,7 +791,7 @@ export default function Cashier(){
             </div>
             <div style={{display:"flex",gap:10}}>
               <button className="btn-ghost" onClick={()=>setVoidItemModal(null)} style={{flex:1,padding:11,fontSize:14,borderRadius:9}}>Cancel</button>
-              <button onClick={submitVoidItem} disabled={!voidReason}
+              <button onClick={()=>{ if(voidReason) setVoidGate(true); }} disabled={!voidReason}
                 style={{flex:1,padding:11,fontSize:14,background:"rgba(248,113,113,0.15)",border:"1px solid rgba(248,113,113,0.4)",borderRadius:9,color:"#F87171",cursor:voidReason?"pointer":"not-allowed",fontFamily:"Inter,sans-serif",fontWeight:600,opacity:voidReason?1:.5}}>
                 Confirm Void
               </button>
