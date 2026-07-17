@@ -259,3 +259,14 @@ export function VoidPinGate({ open, onOk, onCancel }){
     )
   );
 }
+
+// ── PHASE 11: display label for a table/tab ──────────────────────────────────
+// Walk-in tabs store a hidden slot ("WALKIN-20260717-15") as table_id. NEVER
+// show that — show the guest's name. Pass either a tab row, or an order that has
+// table_tabs joined, or a plain {table_id,is_walkin,walkin_name}.
+export function displayTable(x){
+  if(!x) return "";
+  const t = x.table_tabs || x;   // order-with-join, or the row itself
+  if(t.is_walkin) return (t.walkin_name || "Walk-in") + " · walk-in";
+  return "Table " + (t.table_id ?? x.table_id ?? "");
+}

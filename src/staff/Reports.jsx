@@ -454,7 +454,7 @@ export function VoidReports(){
         </div>
         {voids.map(v=>(
           <div key={v.id} style={{padding:"10px 16px",borderBottom:`1px solid ${BORDER}`,display:"grid",gridTemplateColumns:"60px 80px 1fr 80px 80px 80px 100px",gap:8,alignItems:"center",fontSize:13}}>
-            <span style={{color:GOLD,fontWeight:600}}>{v.table_id}</span>
+            <span style={{color:GOLD,fontWeight:600}}>{String(v.table_id||"").startsWith("WALKIN")?"Walk-in":v.table_id}</span>
             <span style={{color:"#888",fontSize:11}}>{fmtTime(v.voided_at)}</span>
             <div>
               <div style={{color:"#e8e0d0"}}>{v.item_name}</div>

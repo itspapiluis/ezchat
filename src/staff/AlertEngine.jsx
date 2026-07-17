@@ -59,7 +59,7 @@ export function useAlertEngine(role){
           alertedVoids.current.add(v.id);
           await createAlert(
             "large_void",
-            `Large Void — Table ${v.table_id}`,
+            `Large Void — ${v.is_walkin?(v.walkin_name+" (walk-in)"):("Table "+v.table_id)}`,
             `${v.voided_by} voided "${v.item_name}" ×${v.quantity} worth ₱${total.toFixed(2)}. Reason: ${v.reason}`,
             {table_id:v.table_id, item:v.item_name, total, voided_by:v.voided_by}
           );
@@ -75,8 +75,8 @@ export function useAlertEngine(role){
           alertedBills.current.add(tab.id);
           await createAlert(
             "bill_request",
-            `Bill Requested — Table ${tab.table_id}`,
-            `Table ${tab.table_id} has requested the bill. Total: ₱${Number(tab.total||0).toFixed(2)}`,
+            `Bill Requested — ${tab.is_walkin?(tab.walkin_name+" (walk-in)"):("Table "+tab.table_id)}`,
+            `${tab.is_walkin?(tab.walkin_name+" (walk-in)"):("Table "+tab.table_id)} has requested the bill. Total: ₱${Number(tab.total||0).toFixed(2)}`,
             {table_id:tab.table_id, total:tab.total}
           );
         }
@@ -110,15 +110,15 @@ export function useAlertEngine(role){
       const cutoff = new Date(Date.now()-config.unpaidMinutes*60*1000).toISOString();
       const {data:unpaid} = await supabase
         .from("table_tabs")
-        .select("id,table_id,bill_requested_at,total")
+        .select("id,table_id,bill_requested_at,total,is_walkin,walkin_name")
         .eq("status","bill_requested")
         .lte("bill_requested_at",cutoff);
       if(unpaid?.length>0){
         for(const tab of unpaid){
           await createAlert(
             "unpaid_bill",
-            `Unpaid Bill — Table ${tab.table_id}`,
-            `Table ${tab.table_id} requested the bill ${config.unpaidMinutes}+ minutes ago and it is still unpaid. Total: ₱${Number(tab.total||0).toFixed(2)}`,
+            `Unpaid Bill — ${tab.is_walkin?(tab.walkin_name+" (walk-in)"):("Table "+tab.table_id)}`,
+            `${tab.is_walkin?(tab.walkin_name+" (walk-in)"):("Table "+tab.table_id)} requested the bill ${config.unpaidMinutes}+ minutes ago and it is still unpaid. Total: ₱${Number(tab.total||0).toFixed(2)}`,
             {table_id:tab.table_id, total:tab.total}
           );
         }

@@ -286,7 +286,7 @@ export default function Cashier(){
       if(error) throw error;
       if(!res?.ok) throw new Error(res?.error||"Split payment failed.");
 
-      setReceiptModal({...res.receipt, items:res.receipt.items});
+      setReceiptModal({...res.receipt, items:res.receipt.items, walkin_name:selectedTab?.is_walkin?selectedTab.walkin_name:null});
       setSplitSel([]);
       setSplitMode(false);
       setPayModal(false);
@@ -370,7 +370,7 @@ export default function Cashier(){
         });
       }catch(_){ /* logging must never block a payment */ }
 
-      setReceiptModal({...receipt, items:receiptItems});
+      setReceiptModal({...receipt, items:receiptItems, walkin_name:selectedTab?.is_walkin?selectedTab.walkin_name:null});
       setPayModal(false);
       setSelectedTab(null);
       setTabItems([]);
@@ -669,7 +669,7 @@ export default function Cashier(){
             style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:16,padding:22,width:"100%",maxWidth:420}}>
             <div style={{fontSize:18,fontWeight:700,color:"#A855F7",marginBottom:4}}>↔ Move Tab</div>
             <div style={{fontSize:12.5,color:"#666",marginBottom:16}}>
-              Move Table <b style={{color:"#e8e0d0"}}>{selectedTab?.table_id}</b> and its whole bill
+              Move <b style={{color:"#e8e0d0"}}>{tabLabel(selectedTab)}</b> and its whole bill
               to another table. The destination must have no open tab.
             </div>
             <select value={moveTarget} onChange={e=>setMoveTarget(e.target.value)}
@@ -842,7 +842,7 @@ export default function Cashier(){
             <div style={{background:`linear-gradient(135deg,${GOLD_DIM}44,${GOLD}11)`,padding:"20px 20px 16px",textAlign:"center",borderBottom:`1px solid ${BORDER}`}}>
               <div style={{fontSize:28,marginBottom:4}}>🧾</div>
               <div style={{fontFamily:"'Playfair Display',serif",fontSize:20,fontWeight:900,color:GOLD}}>Payment Received</div>
-              <div style={{fontSize:12,color:"#555",marginTop:2}}>Table {receiptModal.table_id} · {fmtDate(receiptModal.issued_at)}</div>
+              <div style={{fontSize:12,color:"#555",marginTop:2}}>{receiptModal.walkin_name?`${receiptModal.walkin_name} · walk-in`:`Table ${receiptModal.table_id}`} · {fmtDate(receiptModal.issued_at)}</div>
             </div>
             <div style={{padding:"14px 20px",maxHeight:320,overflowY:"auto"}}>
               {receiptModal.items?.map((item,i)=>(

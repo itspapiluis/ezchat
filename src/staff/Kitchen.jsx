@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase, ORDER_STATUS, VOID_REASONS, fmtTime, fmtPrice, playAlert, loadStaffSession, clearStaffSession, logAudit, ConnectionBanner, VoidPinGate } from "./shared.js";
+import { supabase, ORDER_STATUS, VOID_REASONS, fmtTime, fmtPrice, playAlert, loadStaffSession, clearStaffSession, logAudit, ConnectionBanner, VoidPinGate, displayTable } from "./shared.js";
 import { useAlertEngine, AlertBell } from "./AlertEngine.jsx";
 
 const GOLD = "#C9A84C";
@@ -94,7 +94,7 @@ export default function Kitchen(){
     setLoading(true);
     const {data} = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*, order_items(*), table_tabs(is_walkin,walkin_name)")
       .order("created_at",{ascending:false})
       .limit(100);
     if(data){
@@ -113,7 +113,7 @@ export default function Kitchen(){
   const loadOrderWithItems = async(orderId, flag="")=>{
     const {data} = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*, order_items(*), table_tabs(is_walkin,walkin_name)")
       .eq("id",orderId)
       .maybeSingle();   // BUGFIX: .single() throws when the row is gone
     if(data){
@@ -267,7 +267,7 @@ export default function Kitchen(){
                 {/* Order header */}
                 <div style={{background:`${st.color}15`,padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:`1px solid ${st.color}33`}}>
                   <div>
-                    <div style={{fontSize:18,fontWeight:700,color:st.color}}>Table {order.table_id}</div>
+                    <div style={{fontSize:18,fontWeight:700,color:st.color}}>{displayTable(order)}</div>
                     <div style={{fontSize:11,color:"#888",marginTop:1}}>{fmtTime(order.created_at)} · by {order.user_name}</div>
                   </div>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -318,7 +318,7 @@ export default function Kitchen(){
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:400,width:"100%"}}>
             <div style={{fontSize:16,fontWeight:700,marginBottom:4,color:"#F87171"}}>❌ Void Order</div>
-            <div style={{fontSize:13,color:"#666",marginBottom:16}}>Table {voidModal?.table_id} · {voidModal?.items?.length} food item(s)</div>
+            <div style={{fontSize:13,color:"#666",marginBottom:16}}>{displayTable(voidModal)} · {voidModal?.items?.length} food item(s)</div>
             <div style={{marginBottom:12}}>
               <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REASON</label>
               <select value={voidReason} onChange={e=>setVoidReason(e.target.value)}
