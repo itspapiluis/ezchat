@@ -2835,7 +2835,7 @@ function AdminPanel({onLogout}){
         ))}
       </div>
 
-      <div style={{flex:1,overflowY:"auto",padding:16}}>
+      <div style={{flex:1,minHeight:0,overflowY:"auto",WebkitOverflowScrolling:"touch",padding:16,paddingBottom:80}}>
 
         {/* ── DASHBOARD ── */}
         {tab==="dashboard"&&(

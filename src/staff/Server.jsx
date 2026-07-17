@@ -61,9 +61,12 @@ export default function Server(){
     (async()=>{
       const [{data:cats},{data:items}]=await Promise.all([
         supabase.from("menu_categories").select("*").order("sort_order"),
-        supabase.from("menu_items").select("*").eq("available",true),
+        // BUGFIX: .eq("available",true) HID items whose available flag is NULL.
+        // But SQL `<> false` also excludes NULLs (three-valued logic), so we
+        // fetch everything and filter in JS: show unless EXPLICITLY false.
+        supabase.from("menu_items").select("*"),
       ]);
-      setMenu({cats:cats||[],items:items||[]});
+      setMenu({cats:cats||[], items:(items||[]).filter(i=>i.available!==false)});
     })();
     const ch=supabase.channel("server-orders")
       .on("postgres_changes",{event:"*",schema:"public",table:"order_items"},()=>loadOrders())
@@ -121,7 +124,7 @@ export default function Server(){
       <ConnectionBanner/>
 
       {/* header */}
-      <div style={{display:"flex",alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${BORDER}`,gap:12}}>
+      <div style={{display:"flex",alignItems:"center",padding:"12px 14px",borderBottom:`1px solid ${BORDER}`,gap:8,flexWrap:"wrap"}}>
         <div style={{flex:1}}>
           <div style={{fontFamily:"'Playfair Display',serif",fontSize:18,fontWeight:900,color:GOLD}}>Server</div>
           <div style={{fontSize:11.5,color:"#777"}}>Signed in as <b style={{color:PINK}}>{me}</b></div>
@@ -131,17 +134,17 @@ export default function Server(){
       </div>
 
       {/* tabs */}
-      <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`}}>
+      <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,overflowX:"auto"}}>
         {[["mine","My Tables"],["serve",`Ready to Serve${readyToServe.length?" ("+readyToServe.length+")":""}`],["walkin","Get Order"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)}
-            style={{flex:1,padding:"12px 0",background:"none",border:"none",borderBottom:tab===k?`2px solid ${PINK}`:"2px solid transparent",
+            style={{flex:1,minWidth:110,padding:"13px 6px",background:"none",border:"none",borderBottom:tab===k?`2px solid ${PINK}`:"2px solid transparent",
               color:tab===k?PINK:"#777",fontSize:13.5,fontWeight:600,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
             {l}
           </button>
         ))}
       </div>
 
-      <div style={{padding:16,maxWidth:900,margin:"0 auto"}}>
+      <div style={{padding:"14px 12px 90px",maxWidth:900,margin:"0 auto"}}>
         {tab==="mine"   && <MyTables me={me} assigned={assigned} setAssigned={setAssigned} ordersForTable={ordersForTable}/>}
         {tab==="serve"  && <ReadyToServe list={readyToServe} onServed={markServed}/>}
         {tab==="walkin" && <GetOrder me={me} menu={menu} onDone={()=>{loadOrders();setTab("mine");}}/>}
@@ -173,7 +176,7 @@ function MyTables({me,assigned,setAssigned,ordersForTable}){
           <div style={{flex:1,fontSize:12.5,color:"#888"}}>Tap the tables you're assigned to. Ask your manager which ones.</div>
           <button onClick={()=>setEditing(false)} style={{padding:"7px 14px",background:PINK,border:"none",borderRadius:8,color:"#150a10",fontSize:13,fontWeight:600,cursor:"pointer"}}>Done</button>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(84px,1fr))",gap:8}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(72px,1fr))",gap:7}}>
           {TABLE_LIST.map(t=>(
             <button key={t} onClick={()=>toggle(t)}
               style={{padding:"12px 4px",fontSize:12.5,borderRadius:9,cursor:"pointer",fontFamily:"Inter,sans-serif",
@@ -310,8 +313,12 @@ function GetOrder({me,menu,onDone}){
         tableId=t?.table_id;
       }
       // one order, its items
+      // BUGFIX: orders.user_id is NOT NULL. The guest app always sets it; the
+      // server panel omitted it, so every server order was REJECTED by the
+      // database ("can't send order"). Walk-ins have no real user account, so we
+      // tag them with a synthetic staff id.
       const {data:order,error:oe}=await supabase.from("orders")
-        .insert({tab_id:tabId,table_id:tableId,user_name:name.trim(),status:"pending",placed_by:me})
+        .insert({tab_id:tabId,table_id:tableId,user_id:`server:${me}`,user_name:name.trim(),status:"pending",placed_by:me})
         .select().single();
       if(oe) throw oe;
       const items=cart.map(c=>({
@@ -361,7 +368,7 @@ function GetOrder({me,menu,onDone}){
       </div>
 
       {/* items */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:8,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(130px,1fr))",gap:8,marginBottom:16}}>
         {(activeCat?itemsFor(activeCat):[]).map(item=>{
           const cat=cats.find(c=>c.id===item.category_id);
           return(
