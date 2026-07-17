@@ -31,7 +31,7 @@ export default function StaffLogin(){
   const [lockedUntil, setLockedUntil] = useState(0);
 
   // Phase 7 — /admin-staff never existed; admin panel lives inside App at ?admin=1
-  const ROUTES = { kitchen:"/kitchen", bar:"/bar", cashier:"/cashier", admin:"/?admin=1" };
+  const ROUTES = { kitchen:"/kitchen", bar:"/bar", cashier:"/cashier", server:"/server", admin:"/?admin=1" };
 
   const handleRoleSelect = (role) => {
     setSelectedRole(role);

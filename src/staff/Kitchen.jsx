@@ -27,10 +27,11 @@ input:focus,select:focus,textarea:focus{border-color:#8A6A28}
 `;
 
 const STATUS_FLOW = ["pending","preparing","ready","served"];
+// PHASE 11: the Kitchen no longer marks "Served" — the SERVER does, because the
+// server is the one who physically carries the food out. Kitchen stops at Ready.
 const NEXT_ACTION = {
   pending:   { label:"Accept Order",  color:"#F59E0B", next:"preparing" },
   preparing: { label:"Mark Ready",    color:"#34D399", next:"ready"     },
-  ready:     { label:"Mark Served",   color:"#888",    next:"served"    },
 };
 
 // BUGFIX: Kitchen and Bar used to read `order.status` — a SINGLE shared row.

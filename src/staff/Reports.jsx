@@ -689,7 +689,7 @@ export function BackupPanel(){
 
 
 export function StaffManagement(){
-  const [pins, setPins] = useState({kitchen:"",bar:"",cashier:""});
+  const [pins, setPins] = useState({kitchen:"",bar:"",cashier:"",server:"",void:""});
   const [activity, setActivity] = useState([]);
   const [saving, setSaving] = useState({});
   const [saved, setSaved] = useState({});
@@ -705,6 +705,30 @@ export function StaffManagement(){
       .from("staff_activity").select("*")
       .order("performed_at",{ascending:false}).limit(50);
     if(act) setActivity(act);
+  };
+
+  // PHASE 11: manage server NAMES (shared PIN, pick-your-name model).
+  const [serverList,setServerList] = useState([]);
+  const [newServer,setNewServer] = useState("");
+  const loadServers = async()=>{
+    const {data} = await supabase.from("servers").select("*").order("name");
+    setServerList(data||[]);
+  };
+  useEffect(()=>{ loadServers(); },[]);
+  const addServer = async()=>{
+    const n=newServer.trim();
+    if(!n) return;
+    await supabase.from("servers").insert({name:n});
+    setNewServer(""); loadServers();
+  };
+  const toggleServer = async(sv)=>{
+    await supabase.from("servers").update({active:!sv.active}).eq("id",sv.id);
+    loadServers();
+  };
+  const removeServer = async(sv)=>{
+    if(!window.confirm(`Remove server "${sv.name}"?`)) return;
+    await supabase.from("servers").delete().eq("id",sv.id);
+    loadServers();
   };
 
   const savePin = async(role)=>{
@@ -737,6 +761,8 @@ export function StaffManagement(){
     {key:"kitchen",label:"Kitchen",icon:"👨‍🍳",color:"#34D399"},
     {key:"bar",label:"Bar",icon:"🍸",color:"#60A5FA"},
     {key:"cashier",label:"Cashier",icon:"💰",color:GOLD},
+    {key:"server",label:"Server",icon:"🧑‍🍳",color:"#F472B6"},
+    {key:"void",label:"Void PIN",icon:"🔒",color:"#F87171"},
   ];
 
   const ACTION_LABELS = {
@@ -803,6 +829,44 @@ export function StaffManagement(){
         <div style={{marginTop:10,fontSize:12,color:"#555",background:`rgba(245,158,11,0.06)`,border:`1px solid rgba(245,158,11,0.2)`,borderRadius:8,padding:"8px 14px"}}>
           ⚠️ After changing a PIN, inform the relevant staff immediately. Old PIN stops working right away.
         </div>
+      </div>
+
+      {/* PHASE 11: Server names — everyone shares the SERVER pin, then picks a name here */}
+      <div style={{marginBottom:24}}>
+        <div style={{fontSize:11,color:"#F472B6",letterSpacing:1,marginBottom:6}}>SERVER NAMES</div>
+        <div style={{fontSize:12,color:"#666",marginBottom:12}}>
+          Servers log in with the shared Server PIN, then pick their name from this list.
+          Add your floor staff here.
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
+          <input value={newServer} onChange={e=>setNewServer(e.target.value)} maxLength={30}
+            placeholder="Add a server's name…"
+            onKeyDown={e=>{ if(e.key==="Enter") addServer(); }}
+            style={{flex:1,padding:"10px 12px",background:"#151510",border:`1px solid ${BORDER}`,borderRadius:9,color:"#e8e0d0",fontSize:14,fontFamily:"Inter,sans-serif"}}/>
+          <button onClick={addServer}
+            style={{padding:"10px 18px",background:"#F472B6",border:"none",borderRadius:9,color:"#150a10",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+            Add
+          </button>
+        </div>
+        {serverList.length===0?(
+          <div style={{fontSize:13,color:"#555",padding:"12px 0"}}>No servers yet. Add your first one above.</div>
+        ):(
+          <div style={{display:"grid",gap:8}}>
+            {serverList.map(sv=>(
+              <div key={sv.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:"#151510",border:`1px solid ${BORDER}`,borderRadius:10,opacity:sv.active?1:0.5}}>
+                <span style={{flex:1,fontSize:14,color:"#e8e0d0"}}>{sv.name}{!sv.active&&<span style={{fontSize:11,color:"#666"}}> · off</span>}</span>
+                <button onClick={()=>toggleServer(sv)}
+                  style={{padding:"5px 12px",background:"none",border:`1px solid ${BORDER}`,borderRadius:7,color:"#888",fontSize:12,cursor:"pointer"}}>
+                  {sv.active?"Turn off":"Turn on"}
+                </button>
+                <button onClick={()=>removeServer(sv)}
+                  style={{padding:"5px 12px",background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:7,color:"#F87171",fontSize:12,cursor:"pointer"}}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Activity log */}

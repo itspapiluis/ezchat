@@ -9,12 +9,13 @@ export { supabase };
 // They now live in the `staff_config` table and are checked server-side by the
 // verify_staff_pin() function. Change them in:
 //   Supabase → Table Editor → staff_config
-export const STAFF_ROLES = ["kitchen","bar","cashier","admin"];
+export const STAFF_ROLES = ["kitchen","bar","cashier","server","admin"];
 
 export const ROLE_LABELS = {
   kitchen: "Kitchen",
   bar:     "Bar",
   cashier: "Cashier",
+  server:  "Server",
   admin:   "Admin",
 };
 
@@ -22,6 +23,7 @@ export const ROLE_COLORS = {
   kitchen: "#34D399",
   bar:     "#60A5FA",
   cashier: "#C9A84C",
+  server:  "#F472B6",
   admin:   "#A78BFA",
 };
 
@@ -29,6 +31,7 @@ export const ROLE_ICONS = {
   kitchen: "👨‍🍳",
   bar:     "🍸",
   cashier: "💰",
+  server:  "🧑‍🍳",
   admin:   "👑",
 };
 

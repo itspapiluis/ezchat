@@ -6,6 +6,7 @@ import StaffLogin from './staff/StaffLogin.jsx'
 import Kitchen from './staff/Kitchen.jsx'
 import Bar from './staff/Bar.jsx'
 import Cashier from './staff/Cashier.jsx'
+import Server from './staff/Server.jsx'
 import { hasStaffRole } from './staff/shared.js'
 
 // BUGFIX: this used to read ONE stored role and compare it. With Kitchen open in
@@ -31,6 +32,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         }/>
         <Route path="/cashier" element={
           <ProtectedRoute allowedRole="cashier"><Cashier/></ProtectedRoute>
+        }/>
+        <Route path="/server" element={
+          <ProtectedRoute allowedRole="server"><Server/></ProtectedRoute>
         }/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>

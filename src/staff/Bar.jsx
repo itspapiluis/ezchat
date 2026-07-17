@@ -26,7 +26,14 @@ input,select,textarea{background:#161616;border:1px solid #241E10;color:#e8e0d0;
 input:focus,select:focus,textarea:focus{border-color:#3b82f6}
 `;
 
+// PHASE 11: table orders now get "Served" by the SERVER, not the Bar. But the
+// Bar hands WALK-IN drinks straight over the counter, so it keeps a Served step
+// for those. NEXT_ACTION_WALKIN includes it; the table flow stops at Ready.
 const NEXT_ACTION = {
+  pending:   { label:"Accept Order", color:"#F59E0B", next:"preparing" },
+  preparing: { label:"Mark Ready",   color:"#34D399", next:"ready"     },
+};
+const NEXT_ACTION_WALKIN = {
   pending:   { label:"Accept Order", color:"#F59E0B", next:"preparing" },
   preparing: { label:"Mark Ready",   color:"#34D399", next:"ready"     },
   ready:     { label:"Mark Served",  color:"#888",    next:"served"    },
@@ -88,7 +95,7 @@ export default function Bar(){
     setLoading(true);
     const {data} = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*, order_items(*), table_tabs(is_walkin,walkin_name)")
       .order("created_at",{ascending:false})
       .limit(100);
     if(data){
@@ -106,7 +113,7 @@ export default function Bar(){
   const loadOrderWithItems = async(orderId, flag="")=>{
     const {data} = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*, order_items(*), table_tabs(is_walkin,walkin_name)")
       .eq("id",orderId)
       .maybeSingle();   // BUGFIX: .single() throws when the row is gone
     if(data){
@@ -234,7 +241,8 @@ export default function Bar(){
           {filtered.map(order=>{
             const isNew = newIds.has(order.id);
             const sStatus = stationStatus(order);
-            const action = NEXT_ACTION[sStatus];
+            const isWalkin = order.table_tabs?.is_walkin || order.is_walkin;
+            const action = (isWalkin?NEXT_ACTION_WALKIN:NEXT_ACTION)[sStatus];
             const st = ORDER_STATUS[sStatus]||ORDER_STATUS.pending;
             return(
               <div key={order.id} className={`fade-in${isNew?" new-flash":""}`}
