@@ -170,7 +170,7 @@ async function loadSession(){
     // Verify fingerprint matches this device
     if(session.fingerprint !== getDeviceFingerprint()) return null;
     // Check if user still exists in Supabase
-    const {data} = await supabase.from("users").select("*").eq("id", session.userId).single();
+    const {data} = await supabase.from("users").select("*").eq("id", session.userId).maybeSingle();
     if(!data || data.status === "blocked") {
       clearSession();
       return null;
