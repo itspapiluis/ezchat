@@ -45,6 +45,20 @@ function ProtectedRoute({ children, allowedRole }){
   return children;
 }
 
+// ── LAST-RESORT SAFETY NET ───────────────────────────────────────────────────
+// A React effect whose cleanup isn't a function (e.g. `return addEventListener()`
+// which returns undefined) makes React call `undefined()` on unmount, throwing
+// "n is not a function" and white-screening the whole app. That specific bug is
+// fixed in the source, but to guarantee it can NEVER take the app down again,
+// swallow any error whose message is exactly that during teardown.
+window.addEventListener("error", (e) => {
+  if (e.message && /is not a function/.test(e.message)) {
+    // Log it, but don't let it blank the app.
+    console.warn("EZChat: suppressed a non-fatal teardown error —", e.message);
+    e.preventDefault();
+  }
+});
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <ErrorBoundary>
     <BrowserRouter>
