@@ -809,7 +809,7 @@ function PMPanel({target,me,onClose,notifications}){
   const {playSound,pushNotif,markDMRead}=notifications||{};
 
   useEffect(()=>{if(markDMRead)markDMRead(target.id);},[target.id]);
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[msgs]);
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[msgs]);
 
   useEffect(()=>{
     const load=async()=>{
@@ -905,7 +905,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   const inputRef=useRef(null);
   const typingTimeout=useRef(null);
 
-  useEffect(()=>endRef.current?.scrollIntoView({behavior:"smooth"}),[messages]);
+  useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[messages]);
   useEffect(()=>{const t=setInterval(()=>setAnnIdx(i=>(i+1)%announcements.length),5000);return()=>clearInterval(t);},[announcements.length]);
 
   // ── Load blocked words from Supabase ──
