@@ -1136,7 +1136,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
     }
     try{
       // Check if user is still allowed
-      const {data:statusCheck}=await supabase.from("users").select("status").eq("id",me.id).single();
+      const {data:statusCheck}=await supabase.from("users").select("status").eq("id",me.id).maybeSingle();
       if(statusCheck&&(statusCheck.status==="blocked"||statusCheck.status==="kicked")){
         onLeave(statusCheck.status);
         return;
@@ -1743,7 +1743,7 @@ function CartProvider({children, tableId}){
         async payload=>{
           const item = payload.new;
           // Fetch order info
-          const {data:ord} = await supabase.from("orders").select("user_name,created_at,status,id").eq("id",item.order_id).single();
+          const {data:ord} = await supabase.from("orders").select("user_name,created_at,status,id").eq("id",item.order_id).maybeSingle();
           setOrderHistory(p=>[...p,{...item,orders:ord}]);
         })
       .on("postgres_changes",{event:"UPDATE",schema:"public",table:"order_items",filter:`tab_id=eq.${tab.id}`},

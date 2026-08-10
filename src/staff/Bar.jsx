@@ -134,7 +134,12 @@ export default function Bar(){
   };
 
   const advanceStatus = async(order)=>{
-    const action = NEXT_ACTION[stationStatus(order)];
+    // BUGFIX: a walk-in order must use NEXT_ACTION_WALKIN (which has the
+    // ready -> served step). The button already showed "Mark Served" for walk-ins,
+    // but this handler always used the table flow (NEXT_ACTION, no served step),
+    // so clicking did nothing and the walk-in stayed stuck on the Bar screen.
+    const isWalkin = order.table_tabs?.is_walkin || order.is_walkin;
+    const action = (isWalkin ? NEXT_ACTION_WALKIN : NEXT_ACTION)[stationStatus(order)];
     if(!action) return;
     // BUGFIX: no longer writes `orders.status` (the row the Kitchen shares).
     // Only this station's items change; the DB trigger recalc_order_status()
