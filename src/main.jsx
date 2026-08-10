@@ -9,17 +9,44 @@ import Cashier from './staff/Cashier.jsx'
 import Server from './staff/Server.jsx'
 import { hasStaffRole } from './staff/shared.js'
 
-// BUGFIX: this used to read ONE stored role and compare it. With Kitchen open in
-// one tab and Bar in another, the stored role was whichever logged in last — so
-// the other tab got kicked to /staff on its next re-render. Now each route asks
-// only: "is this browser authorised for MY role?"
+// ── GLOBAL ERROR BOUNDARY ────────────────────────────────────────────────────
+// If ANY component throws during render, React normally unmounts everything and
+// leaves a BLANK WHITE SCREEN with the real cause hidden in a minified stack.
+// This catches the crash and shows the actual error message on screen, so a
+// failure is diagnosable at a glance instead of being an invisible white page.
+class ErrorBoundary extends React.Component {
+  constructor(p){ super(p); this.state = { err: null, info: null }; }
+  static getDerivedStateFromError(err){ return { err }; }
+  componentDidCatch(err, info){ this.setState({ info }); console.error("EZChat crash:", err, info); }
+  render(){
+    if(this.state.err){
+      const msg = String(this.state.err && (this.state.err.stack || this.state.err.message || this.state.err));
+      const comp = this.state.info && this.state.info.componentStack ? String(this.state.info.componentStack) : "";
+      return React.createElement("div", {
+        style:{fontFamily:"ui-monospace,Menlo,monospace",maxWidth:680,margin:"40px auto",padding:24,
+          background:"#151510",color:"#e8e0d0",border:"1px solid #C9A84C",borderRadius:12,lineHeight:1.55}
+      },
+        React.createElement("h2",{style:{color:"#C9A84C",margin:"0 0 8px"}},"EZChat hit an error"),
+        React.createElement("p",{style:{margin:"0 0 12px",color:"#8a8578"}},"The screen below shows what actually failed — screenshot this."),
+        React.createElement("pre",{style:{whiteSpace:"pre-wrap",fontSize:12,background:"#0a0a08",padding:12,borderRadius:8,overflow:"auto",maxHeight:280}}, msg),
+        comp && React.createElement("pre",{style:{whiteSpace:"pre-wrap",fontSize:11,color:"#6a655a",background:"#0a0a08",padding:12,borderRadius:8,marginTop:8,overflow:"auto",maxHeight:200}}, comp),
+        React.createElement("button",{
+          onClick:()=>{ try{localStorage.clear();sessionStorage.clear();}catch(e){} location.reload(); },
+          style:{marginTop:14,padding:"10px 18px",background:"#C9A84C",border:"none",borderRadius:8,color:"#150a10",fontWeight:700,cursor:"pointer"}
+        },"Clear data & reload")
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function ProtectedRoute({ children, allowedRole }){
   if(!hasStaffRole(allowedRole)) return <Navigate to="/staff" replace/>;
   return children;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
+  <ErrorBoundary>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<App/>}/>
@@ -39,5 +66,5 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
     </BrowserRouter>
-  </React.StrictMode>
+  </ErrorBoundary>
 )
