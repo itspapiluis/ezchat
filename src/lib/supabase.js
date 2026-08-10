@@ -9,8 +9,25 @@
 // ============================================================
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "YOUR_SUPABASE_URL";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "YOUR_SUPABASE_ANON_KEY";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+// If the environment variables are missing at BUILD time, createClient() gets an
+// invalid URL and throws "Failed to construct 'URL'" on boot — which React turns
+// into a BLANK WHITE SCREEN with no explanation. This happened when the app was
+// redeployed on a machine/Vercel project where VITE_SUPABASE_URL wasn't set.
+// Fail loudly and clearly instead, so the cause is obvious.
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !/^https:\/\//.test(SUPABASE_URL)) {
+  const msg = "Configuration error: Supabase environment variables are missing. " +
+    "Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel " +
+    "(Project → Settings → Environment Variables), then redeploy.";
+  document.body.innerHTML =
+    '<div style="font-family:sans-serif;max-width:520px;margin:60px auto;padding:24px;' +
+    'background:#151510;color:#e8e0d0;border:1px solid #C9A84C;border-radius:12px;line-height:1.6">' +
+    '<h2 style="color:#C9A84C;margin:0 0 10px">EZChat — Setup needed</h2>' +
+    '<p style="margin:0">' + msg + '</p></div>';
+  throw new Error(msg);
+}
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   // EZChat has no Supabase logins — guests are anonymous and staff use PINs.
