@@ -33,7 +33,7 @@ export default function Server(){
 
   // F1: tabs currently requesting the bill (so we can notify the assigned server)
   const [billRequests,setBillRequests]=useState([]);   // [{table_id, is_walkin, walkin_name, bill_requested_at}]
-  const notifiedRef=React.useRef(new Set());           // table_ids we've already toasted for
+  const notifiedRef=useRef(new Set());                 // table_ids we've already toasted for
 
   // ── who am I ──
   useEffect(()=>{
