@@ -48,6 +48,8 @@ export default function Cashier(){
   const [loading, setLoading] = useState(true);
   const [mainFilter, setMainFilter] = useState("open"); // open | bill_requested | closed
   const [billRequests, setBillRequests] = useState([]);
+  // F1: set of table_ids that have a server assigned (to flag bill requests with none)
+  const [assignedTables, setAssignedTables] = useState(new Set());
 
   // Modals
   const [payModal, setPayModal] = useState(false);
@@ -113,6 +115,9 @@ export default function Cashier(){
       }
       setBillRequests(reqs);
     }
+    // F1: which tables currently have a server assigned (to flag unassigned bill requests)
+    const {data:asg} = await supabase.from("server_assignments").select("table_id");
+    setAssignedTables(new Set((asg||[]).map(a=>a.table_id)));
     setLoading(false);
   };
 
@@ -385,6 +390,23 @@ export default function Cashier(){
     }
   };
 
+  // PHASE 12: called from the post-payment prompt when staff confirm guests left.
+  // Walk-ins have no physical table to hand over (their tab already closed on
+  // payment), so this only applies to real tables.
+  const closeTableAfterPay = async(receipt)=>{
+    if(!receipt || receipt.walkin_name) return;   // walk-in: nothing to close
+    const {data:res, error} = await supabase.rpc("close_table",{
+      p_table_id: receipt.table_id,
+    });
+    if(error || !res?.ok){
+      alert(res?.error || error?.message || "Could not close the table.");
+      return;
+    }
+    await logAudit("table_closed","table_sessions",receipt.table_id,
+      {epoch:res.epoch, via:"post_payment"},"cashier");
+    await loadTabs();
+  };
+
   // ── Reset Table ───────────────────────────────────────────────────────────
   // PHASE 10 — CLOSE TABLE (the guests got up and left).
   // This is the ONLY thing that cuts off their phones. Paying does not, because
@@ -482,6 +504,10 @@ export default function Cashier(){
             {filteredTabs.map(tab=>{
               const isBillReq = tab.status==="bill_requested";
               const isSelected = selectedTab?.id===tab.id;
+              // F1 safeguard: a seated table requesting the bill with NO server
+              // assigned means no server was notified — flag it so the cashier
+              // hands the receipt to someone directly instead of assuming.
+              const noServer = isBillReq && !tab.is_walkin && !assignedTables.has(tab.table_id);
               return(
                 <div key={tab.id} className={`fade-in${isBillReq?" bill-flash":""}`}
                   onClick={()=>selectTab(tab)}
@@ -490,6 +516,11 @@ export default function Cashier(){
                     <div>
                       <div style={{fontSize:15,fontWeight:700,color:isSelected?GOLD:"#e8e0d0"}}>{tabLabel(tab)}</div>
                       <div style={{fontSize:11,color:"#555",marginTop:1}}>{fmtTime(tab.opened_at)}</div>
+                      {noServer&&(
+                        <div style={{fontSize:10,color:"#FBBF24",fontWeight:600,marginTop:3,display:"flex",alignItems:"center",gap:4}}>
+                          ⚠ no server assigned — hand bill directly
+                        </div>
+                      )}
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontSize:13,fontWeight:700,color:GOLD}}>{fmtPrice(tab.total||0)}</div>
@@ -873,9 +904,29 @@ export default function Cashier(){
                 </div>
               </div>
             </div>
-            <div style={{padding:"12px 20px",borderTop:`1px solid ${BORDER}`,textAlign:"center"}}>
-              <div style={{fontSize:11,color:"#444",marginBottom:12}}>Thank you for dining at EasyCart Barcade & Lounge!</div>
-              <button className="btn-gold" onClick={()=>setReceiptModal(null)} style={{width:"100%",padding:12,fontSize:14,borderRadius:10}}>Done ✦</button>
+            <div style={{padding:"14px 20px",borderTop:`1px solid ${BORDER}`}}>
+              <div style={{fontSize:12,color:GOLD,marginBottom:10,textAlign:"center",fontWeight:600}}>
+                What's happening with this table?
+              </div>
+              {/* PHASE 12: force the close/keep decision at the moment of payment, so
+                  staff can't forget to close a table when guests leave. This is the
+                  fix for departed guests still being able to order from home. */}
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <button onClick={()=>{ const r=receiptModal; setReceiptModal(null); closeTableAfterPay(r); }}
+                  style={{width:"100%",padding:12,fontSize:14,fontWeight:700,borderRadius:10,cursor:"pointer",
+                    background:"#F87171",border:"none",color:"#160707",fontFamily:"Inter,sans-serif"}}>
+                  🔒 Guests left — Close Table
+                </button>
+                <button onClick={()=>setReceiptModal(null)}
+                  style={{width:"100%",padding:12,fontSize:14,fontWeight:600,borderRadius:10,cursor:"pointer",
+                    background:SURFACE2,border:`1px solid ${BORDER}`,color:"#e8e0d0",fontFamily:"Inter,sans-serif"}}>
+                  Staying — keep table open
+                </button>
+              </div>
+              <div style={{fontSize:10.5,color:"#444",marginTop:10,textAlign:"center",lineHeight:1.5}}>
+                Close Table locks their phones out so they can't order after leaving.<br/>
+                Keep open if they're ordering another round.
+              </div>
             </div>
           </div>
         </div>

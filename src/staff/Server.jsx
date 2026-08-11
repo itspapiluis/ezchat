@@ -31,6 +31,10 @@ export default function Server(){
   const [toast,setToast]=useState(null);
   const showToast=(msg,kind="ok")=>{ setToast({msg,kind}); setTimeout(()=>setToast(null),2400); };
 
+  // F1: tabs currently requesting the bill (so we can notify the assigned server)
+  const [billRequests,setBillRequests]=useState([]);   // [{table_id, is_walkin, walkin_name, bill_requested_at}]
+  const notifiedRef=React.useRef(new Set());           // table_ids we've already toasted for
+
   // ── who am I ──
   useEffect(()=>{
     supabase.from("servers").select("*").eq("active",true).order("name")
@@ -77,6 +81,43 @@ export default function Server(){
     return()=>supabase.removeChannel(ch);
   },[]);
 
+  // ── F1: bill-request notifications for the assigned server ──
+  // When a guest requests the bill, the server ASSIGNED to that table is notified
+  // so they can pick up the receipt from the cashier and run it to the table.
+  const loadBillRequests=async()=>{
+    const {data}=await supabase.from("table_tabs")
+      .select("table_id,is_walkin,walkin_name,bill_requested_at")
+      .eq("status","bill_requested");
+    setBillRequests(data||[]);
+  };
+  useEffect(()=>{
+    if(!me) return;
+    loadBillRequests();
+    const ch=supabase.channel("server-bill-requests")
+      .on("postgres_changes",{event:"*",schema:"public",table:"table_tabs"},()=>loadBillRequests())
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
+  },[me]);
+
+  // My bill requests = tabs requesting the bill on tables I'm assigned to.
+  // (Walk-ins don't request bills — they're settled at the counter — so this is
+  //  only seated tables, matched against this server's assignments.)
+  const myBillRequests = billRequests.filter(b => !b.is_walkin && assigned.includes(b.table_id));
+
+  // Toast once when a NEW bill request lands on one of my tables.
+  useEffect(()=>{
+    myBillRequests.forEach(b=>{
+      if(!notifiedRef.current.has(b.table_id)){
+        notifiedRef.current.add(b.table_id);
+        showToast(`${b.table_id} requested the bill — pick up the receipt from the cashier`, "warn");
+        playAlert && playAlert();
+      }
+    });
+    // clear ones no longer requesting so they can re-notify next time
+    const active=new Set(myBillRequests.map(b=>b.table_id));
+    notifiedRef.current.forEach(t=>{ if(!active.has(t)) notifiedRef.current.delete(t); });
+  },[billRequests, assigned]);   // eslint-disable-line
+
   const logout=()=>{ localStorage.removeItem("ezchat_server_name"); clearStaffSession("server"); navigate("/staff"); };
 
   // ── name picker ──
@@ -104,6 +145,14 @@ export default function Server(){
 
   // orders for a given table_id
   const ordersForTable=(t)=>orders.filter(o=>o.table_id===t && stationStatus(o.order_items)!=="voided");
+
+  // F2: all OPEN walk-in orders (any server can see + act on them).
+  // Grouped by the walk-in tab; owner is taken from orders.placed_by.
+  const walkinOrders = orders.filter(o =>
+    o.table_tabs?.is_walkin &&
+    o.table_tabs?.status !== "closed" &&
+    stationStatus(o.order_items) !== "voided"
+  );
 
   // items ready to run out (any table)
   const readyToServe=orders.filter(o=>{
@@ -140,6 +189,19 @@ export default function Server(){
         <button onClick={logout} style={{padding:"6px 12px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:8,color:"#888",fontSize:12,cursor:"pointer"}}>Logout</button>
       </div>
 
+      {/* F1: persistent bill-out banner — stays until the tab is paid/closed */}
+      {myBillRequests.length>0 && (
+        <div style={{padding:"10px 12px",display:"flex",flexDirection:"column",gap:6,
+          background:"#3a2f12",borderBottom:"1px solid #8a6d1e"}}>
+          {myBillRequests.map(b=>(
+            <div key={b.table_id} style={{display:"flex",alignItems:"center",gap:8,fontSize:13,color:"#fcd34d",fontWeight:600}}>
+              <span style={{fontSize:15}}>🧾</span>
+              <span>{b.table_id} requested the bill — pick up the receipt from the cashier</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,overflowX:"auto"}}>
         {[["mine","My Tables"],["serve",`Ready to Serve${readyToServe.length?" ("+readyToServe.length+")":""}`],["walkin","Get Order"]].map(([k,l])=>(
@@ -152,7 +214,8 @@ export default function Server(){
       </div>
 
       <div style={{padding:"14px 12px 90px",maxWidth:900,margin:"0 auto"}}>
-        {tab==="mine"   && <MyTables me={me} assigned={assigned} setAssigned={setAssigned} ordersForTable={ordersForTable}/>}
+        {tab==="mine"   && <MyTables me={me} assigned={assigned} setAssigned={setAssigned} ordersForTable={ordersForTable}
+                             walkinOrders={walkinOrders} onServed={markServed}/>}
         {tab==="serve"  && <ReadyToServe list={readyToServe} onServed={markServed}/>}
         {tab==="walkin" && <GetOrder me={me} menu={menu} showToast={showToast}
                              onDone={()=>{ loadOrders(); setTimeout(()=>setTab("mine"),900); }}/>}
@@ -168,7 +231,7 @@ export default function Server(){
 }
 
 // ── MY TABLES ────────────────────────────────────────────────────────────────
-function MyTables({me,assigned,setAssigned,ordersForTable}){
+function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServed}){
   const [editing,setEditing]=useState(false);
 
   const toggle=async(t)=>{
@@ -238,6 +301,56 @@ function MyTables({me,assigned,setAssigned,ordersForTable}){
                     ))}
                   </div>
                 ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* F2: WALK-INS — every server sees all walk-ins; owner is labeled, anyone can act */}
+      <div style={{display:"flex",alignItems:"center",margin:"22px 0 12px"}}>
+        <div style={{flex:1,fontSize:11,color:GOLD,letterSpacing:1}}>WALK-INS</div>
+        <div style={{fontSize:11,color:"#666"}}>{walkinOrders.length?`${walkinOrders.length} active`:""}</div>
+      </div>
+      {walkinOrders.length===0?(
+        <div style={{textAlign:"center",padding:"28px 20px",color:"#555"}}>
+          <div style={{fontSize:28,marginBottom:6}}>🧍</div>
+          <div style={{fontSize:13}}>No active walk-ins</div>
+          <div style={{fontSize:11.5,marginTop:4}}>Use "Get Order" to take a walk-in's order.</div>
+        </div>
+      ):(
+        <div style={{display:"grid",gap:12}}>
+          {walkinOrders.map(o=>{
+            const mine = o.placed_by===me;
+            const items=(o.order_items||[]).filter(i=>!i.voided);
+            const hasReady=items.some(i=>i.status==="ready");
+            return(
+              <div key={o.id} style={{background:SURFACE,border:`1px solid ${mine?PINK:BORDER}`,borderRadius:12,padding:"12px 14px"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                  <span style={{fontSize:15,fontWeight:700,color:GOLD}}>
+                    {o.table_tabs?.walkin_name || o.user_name || "Walk-in"}
+                  </span>
+                  <span style={{fontSize:10.5,fontWeight:600,padding:"2px 8px",borderRadius:20,
+                    background:mine?"rgba(244,114,182,0.18)":"#222",color:mine?PINK:"#999"}}>
+                    {mine?"You":`by ${o.placed_by||"?"}`}
+                  </span>
+                  <span style={{marginLeft:"auto",fontSize:11,color:"#666"}}>{fmtTime(o.created_at)}</span>
+                </div>
+                {items.length===0?(
+                  <div style={{fontSize:12.5,color:"#555"}}>No items</div>
+                ):items.map(i=>(
+                  <div key={i.id} style={{display:"flex",gap:8,padding:"2px 0"}}>
+                    <span style={{fontSize:13,flex:1}}>{i.quantity}× {i.item_name}</span>
+                    <span style={{fontSize:11,color:i.status==="ready"?"#34D399":i.status==="served"?"#666":"#F59E0B"}}>{i.status}</span>
+                  </div>
+                ))}
+                {hasReady && onServed && (
+                  <button onClick={()=>onServed(o)}
+                    style={{marginTop:10,width:"100%",padding:"9px",background:"#34D399",border:"none",borderRadius:9,
+                      color:"#04160e",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+                    Mark Served
+                  </button>
+                )}
               </div>
             );
           })}
