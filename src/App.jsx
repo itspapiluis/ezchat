@@ -1830,6 +1830,16 @@ function CartProvider({children, tableId}){
       if(!await rateLimit(me.id,"order")){
         return {success:false,error:"Too many orders — please wait a moment"};
       }
+      // SAFETY NET: an item can go unavailable between viewing the menu and
+      // submitting. Re-check availability against the DB so a sold-out item can
+      // never be ordered, even if it slipped through the greyed-out UI.
+      const cartIds = cartItems.map(c=>c.menu_item_id);
+      const {data:availRows} = await supabase.from("menu_items")
+        .select("id,name,available").in("id",cartIds);
+      const soldOut = (availRows||[]).filter(r=>r.available===false);
+      if(soldOut.length){
+        return {success:false,error:`Sorry, ${soldOut.map(s=>s.name).join(", ")} just went unavailable. Please remove it from your order.`};
+      }
       // Create order
       const {data:order,error:oe} = await supabase.from("orders").insert({
         tab_id: tab.id,
@@ -2260,7 +2270,9 @@ function MenuModal({onClose, hasTable=false}){
     const load=async()=>{
       setLoading(true);
       const {data:cats}=await supabase.from("menu_categories").select("*").order("sort_order");
-      const {data:itms}=await supabase.from("menu_items").select("*").eq("available",true).order("sort_order");
+      // Load ALL items (not just available) so sold-out ones can be shown greyed
+      // out instead of vanishing. The render + submit both respect `available`.
+      const {data:itms}=await supabase.from("menu_items").select("*").order("sort_order");
       if(cats){
         setCategories(cats);
         const first=cats.find(c=>c.type==="food");
@@ -2270,6 +2282,13 @@ function MenuModal({onClose, hasTable=false}){
       setLoading(false);
     };
     load();
+    // Real-time: when admin toggles an item's availability, every open guest
+    // menu updates within a second. Menu changes are rare, so this subscription
+    // is almost always idle — negligible egress.
+    const ch=supabase.channel("guest-menu-availability")
+      .on("postgres_changes",{event:"*",schema:"public",table:"menu_items"},()=>load())
+      .subscribe();
+    return()=>supabase.removeChannel(ch);
   },[]);
 
   const tabs=[
@@ -2332,18 +2351,26 @@ function MenuModal({onClose, hasTable=false}){
             activeItems.map((item,idx)=>{
               const catType = categories.find(c=>c.id===activeCat)?.type||"food";
               const inCart = cart?.cartItems?.find(c=>c.menu_item_id===item.id);
+              const soldOut = item.available===false;   // greyed, not orderable
               return(
-                <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",padding:"10px 12px",marginBottom:6,background:idx%2===0?SURFACE:SURFACE2,borderRadius:10,border:`1px solid ${BORDER}`,gap:8}}>
+                <div key={item.id} className="fade-in" style={{display:"flex",alignItems:"center",padding:"10px 12px",marginBottom:6,background:idx%2===0?SURFACE:SURFACE2,borderRadius:10,border:`1px solid ${BORDER}`,gap:8,opacity:soldOut?0.5:1}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,fontWeight:500,color:"#e8e0d0"}}>{item.name}</div>
+                    <div style={{fontSize:13,fontWeight:500,color:"#e8e0d0",display:"flex",alignItems:"center",gap:6}}>
+                      <span style={soldOut?{textDecoration:"line-through",color:"#888"}:undefined}>{item.name}</span>
+                      {soldOut&&<span style={{fontSize:9.5,fontWeight:700,color:"#F87171",background:"rgba(248,113,113,0.12)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:6,padding:"1px 6px",letterSpacing:.3}}>SOLD OUT</span>}
+                    </div>
                     {item.description&&<div style={{fontSize:10,color:"#555",marginTop:1,lineHeight:1.4}}>{item.description}</div>}
-                    <div style={{fontSize:13,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif",marginTop:3}}>₱{Number(item.price).toLocaleString()}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:soldOut?"#666":GOLD,fontFamily:"'Playfair Display',serif",marginTop:3}}>₱{Number(item.price).toLocaleString()}</div>
                   </div>
                   {hasTable&&(
+                    soldOut?(
+                      <span style={{flexShrink:0,padding:"7px 12px",fontSize:11.5,color:"#777",fontWeight:600,whiteSpace:"nowrap"}}>Unavailable</span>
+                    ):(
                     <button onClick={()=>handleAddToCart(item,catType)}
                       style={{flexShrink:0,padding:"7px 12px",background:inCart?`rgba(201,168,76,0.15)`:`linear-gradient(135deg,${GOLD},${GOLD_LIGHT})`,border:inCart?`1px solid ${GOLD_DIM}`:"none",borderRadius:8,color:inCart?"#C9A84C":"#080808",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif",transition:"all .2s",whiteSpace:"nowrap"}}>
                       {inCart?`+${inCart.quantity} ✓`:"+ Add"}
                     </button>
+                    )
                   )}
                 </div>
               );

@@ -156,30 +156,39 @@ export default function Bar(){
     await logAudit(`order_${action.next}`,"orders",order.id,{table_id:order.table_id},"bar");
   };
 
+  // PER-ITEM: advance one drink item. Walk-in drinks include the ready->served
+  // step (the bar hands walk-ins their drinks directly); table drinks stop at ready.
+  const advanceItem = async(item, isWalkin)=>{
+    const map = isWalkin ? NEXT_ACTION_WALKIN : NEXT_ACTION;
+    const next = map[item.status]?.next;
+    if(!next) return;
+    const {error} = await supabase.from("order_items")
+      .update({status:next})
+      .eq("id",item.id)
+      .eq("voided",false);
+    if(error){ console.warn("advanceItem failed:",error.message); return; }
+    await logAudit(`item_${next}`,"order_items",item.id,{item:item.item_name},"bar");
+  };
+
   const _doVoid = async()=>{
-    if(!voidReason) return;
+    if(!voidReason || !voidModal) return;
     const reason = voidNote?`${voidReason}: ${voidNote}`:voidReason;
-    // BUGFIX: voids only THIS station's drinks now. It used to also mark the
-    // whole ORDER voided, which erased the guest's food from the Kitchen screen
-    // while still billing them for it.
+    const item = voidModal;   // single order_item
     const {error:ve} = await supabase.from("order_items")
       .update({voided:true,void_reason:reason,voided_at:new Date().toISOString(),status:"voided"})
-      .eq("order_id",voidModal.id)
-      .eq("voided",false)
-      .in("category_type",["drinks","spirits"]);
+      .eq("id",item.id)
+      .eq("voided",false);
     if(ve){
       console.warn("void failed:",ve.message);
       setVoidModal(null);
       return;
     }
-    // BUGFIX: .insert(undefined) threw when items was missing.
-    const rows = (voidModal.items||[]).filter(i=>!i.voided).map(i=>({
-      order_item_id:i.id,tab_id:i.tab_id,table_id:i.table_id,
-      item_name:i.item_name,item_price:i.item_price,quantity:i.quantity,
+    await supabase.from("void_logs").insert({
+      order_item_id:item.id,tab_id:item.tab_id,table_id:item.table_id,
+      item_name:item.item_name,item_price:item.item_price,quantity:item.quantity,
       reason,voided_by:"bar"
-    }));
-    if(rows.length) await supabase.from("void_logs").insert(rows);
-    await logAudit("order_voided","orders",voidModal.id,{reason},"bar");
+    });
+    await logAudit("item_voided","order_items",item.id,{reason,item:item.item_name},"bar");
     setVoidModal(null);
     loadOrders();
   };
@@ -263,33 +272,40 @@ export default function Bar(){
                   </div>
                 </div>
                 <div style={{padding:"12px 16px"}}>
-                  {order.items?.filter(i=>!i.voided).map(item=>(
-                    <div key={item.id} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${BORDER}`}}>
-                      <div>
-                        <div style={{fontSize:14,color:"#e8e0d0",fontWeight:500}}>{item.item_name}</div>
-                        <div style={{fontSize:11,color:"#555"}}>×{item.quantity} · {item.category_type}</div>
+                  {order.items?.filter(i=>!i.voided).map(item=>{
+                    const isPaid = !!item.paid_receipt_id;
+                    const iStatus = isPaid ? "paid" : item.status;
+                    const iMap = isWalkin ? NEXT_ACTION_WALKIN : NEXT_ACTION;
+                    const iAction = iMap[item.status];
+                    const ist = ORDER_STATUS[iStatus] || ORDER_STATUS.pending;
+                    return(
+                      <div key={item.id} style={{padding:"9px 0",borderBottom:`1px solid ${BORDER}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:iAction?7:0}}>
+                          <div>
+                            <div style={{fontSize:14,color:"#e8e0d0",fontWeight:500}}>{item.quantity}× {item.item_name}</div>
+                            <div style={{fontSize:11,color:ist.color,marginTop:2,fontWeight:600}}>{ist.icon} {ist.label}</div>
+                          </div>
+                          <div style={{fontSize:13,color:GOLD,fontWeight:600}}>{fmtPrice(item.subtotal)}</div>
+                        </div>
+                        {iAction && (
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn-gold" onClick={()=>advanceItem(item,isWalkin)}
+                              style={{flex:1,padding:"7px 0",fontSize:12.5,borderRadius:8,background:`linear-gradient(135deg,${iAction.color},${iAction.color}dd)`}}>
+                              {iAction.label}
+                            </button>
+                            <button onClick={()=>{setVoidModal(item);setVoidReason("");setVoidNote("");}}
+                              style={{padding:"7px 12px",background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:8,cursor:"pointer",fontSize:12.5,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
+                              Void
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      <div style={{fontSize:13,color:GOLD,fontWeight:600}}>{fmtPrice(item.subtotal)}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {order.note&&(
                     <div style={{marginTop:8,fontSize:12,color:"#888",background:SURFACE2,borderRadius:8,padding:"6px 10px"}}>📝 {order.note}</div>
                   )}
                 </div>
-                {sStatus!=="served"&&sStatus!=="voided"&&(
-                  <div style={{padding:"10px 16px",borderTop:`1px solid ${BORDER}`,display:"flex",gap:8}}>
-                    {action&&(
-                      <button className="btn-gold" onClick={()=>advanceStatus(order)}
-                        style={{flex:1,padding:"9px 0",fontSize:13,borderRadius:9,background:`linear-gradient(135deg,${action.color},${action.color}dd)`}}>
-                        {action.label}
-                      </button>
-                    )}
-                    <button onClick={()=>{setVoidModal(order);setVoidReason("");setVoidNote("");}}
-                      style={{padding:"9px 14px",background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
-                      Void
-                    </button>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -299,8 +315,8 @@ export default function Bar(){
       {voidModal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:400,width:"100%"}}>
-            <div style={{fontSize:16,fontWeight:700,marginBottom:4,color:"#F87171"}}>❌ Void Drink Order</div>
-            <div style={{fontSize:13,color:"#666",marginBottom:16}}>{displayTable(voidModal)}</div>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:4,color:"#F87171"}}>❌ Void Item</div>
+            <div style={{fontSize:13,color:"#666",marginBottom:16}}>{voidModal?.quantity}× {voidModal?.item_name}</div>
             <div style={{marginBottom:12}}>
               <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REASON</label>
               <select value={voidReason} onChange={e=>setVoidReason(e.target.value)} style={{width:"100%",padding:"10px 12px",fontSize:14,borderRadius:8}}>

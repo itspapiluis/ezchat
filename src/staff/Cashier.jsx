@@ -75,6 +75,19 @@ export default function Cashier(){
   const [discReason, setDiscReason] = useState("");
   const [discounts, setDiscounts] = useState([]);
 
+  // F1: Other Payables (broken glass, CC fee, etc.) — mirror of discounts, ADDS.
+  const [payableModal, setPayableModal] = useState(false);
+  const [payableType, setPayableType] = useState("amount");   // amount | percent
+  const [payableValue, setPayableValue] = useState("");
+  const [payableReason, setPayableReason] = useState("");
+  const [payables, setPayables] = useState([]);               // [{type,value,reason}]
+
+  // F2: tab_id -> payment method label, for the badge on closed tabs
+  const [receiptMethods, setReceiptMethods] = useState({});
+
+  // F3: Multi-payment — amount entered per method. Blank/0 = unused.
+  const [splitPay, setSplitPay] = useState({});               // {cash: "500", gcash:"300"}
+
   // Void item
   const [voidReason, setVoidReason] = useState("");
   const [voidNote, setVoidNote] = useState("");
@@ -118,6 +131,18 @@ export default function Cashier(){
     // F1: which tables currently have a server assigned (to flag unassigned bill requests)
     const {data:asg} = await supabase.from("server_assignments").select("table_id");
     setAssignedTables(new Set((asg||[]).map(a=>a.table_id)));
+    // F2: payment method per closed tab (for the badge in the list).
+    const {data:rcpts} = await supabase.from("receipts")
+      .select("tab_id,payment_method,payment_breakdown").eq("status","paid");
+    const mmap={};
+    (rcpts||[]).forEach(r=>{
+      if(Array.isArray(r.payment_breakdown)&&r.payment_breakdown.length>0){
+        mmap[r.tab_id]=r.payment_breakdown.map(b=>b.method).join("+");
+      }else if(r.payment_method){
+        mmap[r.tab_id]=r.payment_method;
+      }
+    });
+    setReceiptMethods(mmap);
     setLoading(false);
   };
 
@@ -138,6 +163,12 @@ export default function Cashier(){
 
   const selectTab = async(tab)=>{
     setSelectedTab(tab);
+    // Reset client-side, per-tab state so nothing leaks from the previous tab:
+    // payables and the multi-payment split are not stored in the DB until payment.
+    setPayables([]);
+    setSplitPay({});
+    setSplitMode(false);
+    setSplitSel([]);
     await loadTabItems(tab.id);
   };
 
@@ -167,6 +198,34 @@ export default function Cashier(){
   },0));
 
   const grandTotal = peso(Math.max(0, subtotal - totalDiscountAmt));
+
+  // F1: Other Payables ADD to the bill (broken glass, CC fee...). Percentage is
+  // computed on the post-discount total, so a CC fee applies to what's owed.
+  const totalPayableAmt = peso(payables.reduce((s,p)=>{
+    if(p.type==="percent") return s + (grandTotal * Number(p.value)/100);
+    return s + Number(p.value);   // fixed amount
+  },0));
+
+  // The real amount owed = items − discounts + payables.
+  const finalTotal = peso(grandTotal + totalPayableAmt);
+
+  // F3: sum of what the cashier has entered across payment methods.
+  const splitEntered = peso(Object.values(splitPay).reduce((s,v)=>s+(Number(v)||0),0));
+  const splitMatches = Math.abs(splitEntered - finalTotal) <= 0.01;
+
+  // ── Other Payables (client-side until payment; finalized onto the receipt) ──
+  const applyPayable = ()=>{
+    if(!payableValue || Number(payableValue)<=0) return;
+    if(!payableReason.trim()){ alert("Please enter a reason for this payable."); return; }
+    if(tabItems.some(i=>i.paid_receipt_id)){
+      alert("Part of this tab is already paid. Add payables before taking any payment.");
+      return;
+    }
+    setPayables(p=>[...p,{ id:Date.now(), type:payableType, value:Number(payableValue), reason:payableReason.trim() }]);
+    setPayableModal(false);
+    setPayableValue(""); setPayableReason(""); setPayableType("amount");
+  };
+  const removePayable = (id)=> setPayables(p=>p.filter(x=>x.id!==id));
 
   // ── Apply Discount ────────────────────────────────────────────────────────
   const applyDiscount = async()=>{
@@ -348,15 +407,30 @@ export default function Cashier(){
       // pay_tab() does both in ONE database transaction: either the receipt is
       // created AND the tab closes, or nothing happens. It also self-heals a tab
       // that is already stuck in that state.
+      // F3: build the payment breakdown from entered per-method amounts.
+      // Only include methods with a positive amount. If nothing was entered
+      // (cashier used the single-method picker), fall back to one entry.
+      const breakdown = Object.entries(splitPay)
+        .filter(([,v])=>Number(v)>0)
+        .map(([method,v])=>({method, amount:peso(v)}));
+      const usingSplit = breakdown.length>0;
+      // Human summary for payment_method (kept for reports/old code).
+      const methodSummary = usingSplit
+        ? breakdown.map(b=>`${b.method} ${b.amount}`).join(" + ")
+        : payMethod;
+
       const {data:res, error:pe} = await supabase.rpc("pay_tab",{
         p_tab_id:         selectedTab.id,
         p_items:          receiptItems,
         p_subtotal:       subtotal,
         p_discount_amt:   totalDiscountAmt,
         p_discount_note:  discounts.map(d=>`${d.type}${d.type!=="complimentary"?" "+d.value:""}`).join(", ")||null,
-        p_total:          grandTotal,
-        p_payment_method: payMethod,
+        p_total:          finalTotal,
+        p_payment_method: methodSummary,
         p_payment_ref:    payRef||"",
+        p_payable_amt:    totalPayableAmt,
+        p_payable_note:   payables.map(p=>`${p.reason} (${p.type==="percent"?p.value+"%":"₱"+p.value})`).join(", ")||null,
+        p_breakdown:      usingSplit ? breakdown : null,
       });
       if(pe) throw pe;
       if(!res?.ok) throw new Error(res?.error||"Payment failed.");
@@ -364,14 +438,14 @@ export default function Cashier(){
       const receipt = res.receipt;
 
       await logAudit("bill_paid","table_tabs",selectedTab.id,{
-        total:grandTotal, payment_method:payMethod, receipt_id:receipt.id
+        total:finalTotal, payment_method:methodSummary, receipt_id:receipt.id
       },"cashier");
       // BUGFIX: same .catch() TypeError — this one fired AFTER the receipt was
       // written but BEFORE the UI cleared, so payment would appear to hang.
       try{
         await supabase.from("staff_activity").insert({
           role:"cashier", action:"payment",
-          details:{table_id:selectedTab.table_id, total:grandTotal, method:payMethod}
+          details:{table_id:selectedTab.table_id, total:finalTotal, method:methodSummary}
         });
       }catch(_){ /* logging must never block a payment */ }
 
@@ -380,6 +454,8 @@ export default function Cashier(){
       setSelectedTab(null);
       setTabItems([]);
       setDiscounts([]);
+      setPayables([]);
+      setSplitPay({});
       await loadTabs();
     }catch(e){
       alert("Payment error: "+(e.message||e));
@@ -525,6 +601,11 @@ export default function Cashier(){
                     <div style={{textAlign:"right"}}>
                       <div style={{fontSize:13,fontWeight:700,color:GOLD}}>{fmtPrice(tab.total||0)}</div>
                       {isBillReq&&<div style={{fontSize:9,color:"#F87171",fontWeight:700,letterSpacing:.5,marginTop:2}}>BILL REQ !</div>}
+                      {tab.status==="closed"&&receiptMethods[tab.id]&&(
+                        <div style={{fontSize:9.5,color:"#60A5FA",fontWeight:600,marginTop:2,textTransform:"uppercase",letterSpacing:.3}}>
+                          {receiptMethods[tab.id]}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -565,6 +646,11 @@ export default function Cashier(){
                         style={{padding:"8px 14px",background:splitMode?"rgba(96,165,250,0.15)":"rgba(96,165,250,0.06)",border:"1px solid rgba(96,165,250,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#60A5FA",fontFamily:"Inter,sans-serif"}}>
                         {splitMode?"✕ Cancel Split":"🧾 Split Bill"}
                       </button>
+                      <button onClick={()=>setPayableModal(true)}
+                        title="Add a charge — broken glass, card fee, corkage, etc."
+                        style={{padding:"8px 14px",background:"rgba(251,146,60,0.08)",border:"1px solid rgba(251,146,60,0.35)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#FB923C",fontFamily:"Inter,sans-serif"}}>
+                        ＋ Other Payables
+                      </button>
                       <button onClick={()=>setMoveModal(true)}
                         title="Guests changed seats — move this tab to another table"
                         style={{padding:"8px 14px",background:"rgba(168,85,247,0.06)",border:"1px solid rgba(168,85,247,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#A855F7",fontFamily:"Inter,sans-serif"}}>
@@ -601,6 +687,25 @@ export default function Cashier(){
                         </span>
                         {selectedTab.status!=="closed"&&(
                           <button onClick={()=>removeDiscount(d.id)}
+                            style={{background:"none",border:"none",color:"#F87171",cursor:"pointer",fontSize:14,fontFamily:"Inter,sans-serif"}}>×</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Applied payables */}
+                {payables.length>0&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{fontSize:11,color:"#FB923C",letterSpacing:1,marginBottom:8}}>OTHER PAYABLES</div>
+                    {payables.map(p=>(
+                      <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,background:"rgba(251,146,60,0.06)",border:"1px solid rgba(251,146,60,0.27)",borderRadius:9,padding:"7px 12px",marginBottom:5}}>
+                        <span style={{fontSize:12,color:"#FB923C",flex:1}}>
+                          ＋ {p.type==="percent"?`${p.value}%`:`₱${p.value}`}
+                          <span style={{color:"#666"}}> · {p.reason}</span>
+                        </span>
+                        {selectedTab.status!=="closed"&&(
+                          <button onClick={()=>removePayable(p.id)}
                             style={{background:"none",border:"none",color:"#F87171",cursor:"pointer",fontSize:14,fontFamily:"Inter,sans-serif"}}>×</button>
                         )}
                       </div>
@@ -681,9 +786,15 @@ export default function Cashier(){
                     <span style={{fontSize:13,color:GOLD}}>- {fmtPrice(totalDiscountAmt)}</span>
                   </div>
                 )}
+                {totalPayableAmt>0&&(
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{fontSize:13,color:"#FB923C"}}>Other payables</span>
+                    <span style={{fontSize:13,color:"#FB923C"}}>+ {fmtPrice(totalPayableAmt)}</span>
+                  </div>
+                )}
                 <div style={{display:"flex",justifyContent:"space-between",paddingTop:8,borderTop:`1px solid ${BORDER}`,marginTop:4}}>
                   <span style={{fontSize:16,fontWeight:700}}>Total</span>
-                  <span style={{fontSize:20,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(grandTotal)}</span>
+                  <span style={{fontSize:20,fontWeight:700,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(finalTotal)}</span>
                 </div>
               </div>
             </>
@@ -730,36 +841,85 @@ export default function Cashier(){
             <div style={{fontSize:18,fontWeight:700,marginBottom:4,color:GOLD}}>💵 Process Payment</div>
             <div style={{fontSize:13,color:"#555",marginBottom:20}}>{tabLabel(selectedTab)}</div>
 
-            <div style={{background:SURFACE2,borderRadius:12,padding:"14px 16px",marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <span style={{fontSize:15,color:"#888"}}>Amount Due</span>
-              <span style={{fontSize:24,fontWeight:900,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(grandTotal)}</span>
+            <div style={{background:SURFACE2,borderRadius:12,padding:"14px 16px",marginBottom:16,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <span style={{fontSize:15,color:"#888"}}>{splitMode?"Selected items":"Amount Due"}</span>
+              <span style={{fontSize:24,fontWeight:900,color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(splitMode?splitTotal:finalTotal)}</span>
             </div>
 
-            <div style={{marginBottom:14}}>
-              <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:8}}>PAYMENT METHOD</label>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                {PAYMENT_METHODS.map(m=>(
-                  <button key={m.value} onClick={()=>setPayMethod(m.value)}
-                    style={{padding:"10px 8px",background:payMethod===m.value?`rgba(201,168,76,0.12)`:SURFACE2,border:`1px solid ${payMethod===m.value?GOLD_DIM:BORDER}`,borderRadius:9,cursor:"pointer",fontSize:13,color:payMethod===m.value?GOLD:"#888",fontFamily:"Inter,sans-serif",fontWeight:payMethod===m.value?700:400,transition:"all .15s"}}>
-                    {m.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {splitMode ? (
+              /* SPLIT-BILL: pay for selected items only, single method (its own flow) */
+              <>
+                <div style={{marginBottom:14}}>
+                  <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:8}}>PAYMENT METHOD</label>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                    {PAYMENT_METHODS.map(m=>(
+                      <button key={m.value} onClick={()=>setPayMethod(m.value)}
+                        style={{padding:"10px 8px",background:payMethod===m.value?`rgba(201,168,76,0.12)`:SURFACE2,border:`1px solid ${payMethod===m.value?GOLD_DIM:BORDER}`,borderRadius:9,cursor:"pointer",fontSize:13,color:payMethod===m.value?GOLD:"#888",fontFamily:"Inter,sans-serif",fontWeight:payMethod===m.value?700:400}}>
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {payMethod!=="cash"&&(
+                  <div style={{marginBottom:14}}>
+                    <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REFERENCE NUMBER (OPTIONAL)</label>
+                    <input value={payRef} onChange={e=>setPayRef(e.target.value)} placeholder="e.g. GCash ref number"
+                      style={{width:"100%",padding:"10px 12px",fontSize:14,borderRadius:8}}/>
+                  </div>
+                )}
+              </>
+            ) : (
+              /* NORMAL: multi-payment — enter an amount per method used */
+              <>
+                <div style={{marginBottom:12}}>
+                  <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:8}}>PAYMENT — enter amount per method</label>
+                  <div style={{display:"grid",gap:8}}>
+                    {PAYMENT_METHODS.map(m=>(
+                      <div key={m.value} style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{flex:1,fontSize:13.5,color:"#bbb"}}>{m.label}</span>
+                        <div style={{display:"flex",alignItems:"center",gap:4}}>
+                          <span style={{fontSize:13,color:"#666"}}>₱</span>
+                          <input type="number" inputMode="decimal" value={splitPay[m.value]||""}
+                            onChange={e=>setSplitPay(s=>({...s,[m.value]:e.target.value}))}
+                            placeholder="0"
+                            style={{width:110,padding:"9px 10px",fontSize:14,borderRadius:8,textAlign:"right"}}/>
+                        </div>
+                      </div>
+                    ))}
+                    <button onClick={()=>{ const first=PAYMENT_METHODS[0]?.value; if(first) setSplitPay({[first]:String(finalTotal)}); }}
+                      style={{marginTop:2,padding:"7px",background:"none",border:`1px dashed ${BORDER}`,borderRadius:8,color:"#888",fontSize:12,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+                      Fill full amount as {PAYMENT_METHODS[0]?.label||"first method"}
+                    </button>
+                  </div>
+                </div>
 
-            {payMethod!=="cash"&&(
-              <div style={{marginBottom:14}}>
-                <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REFERENCE NUMBER (OPTIONAL)</label>
-                <input value={payRef} onChange={e=>setPayRef(e.target.value)} placeholder="e.g. GCash ref number"
-                  style={{width:"100%",padding:"10px 12px",fontSize:14,borderRadius:8}}/>
-              </div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",borderRadius:10,marginBottom:14,
+                  background:splitMatches?"rgba(52,211,153,0.08)":"rgba(248,113,113,0.06)",
+                  border:`1px solid ${splitMatches?"rgba(52,211,153,0.3)":"rgba(248,113,113,0.25)"}`}}>
+                  <span style={{fontSize:12.5,color:splitMatches?"#34D399":"#F87171"}}>
+                    {splitMatches?"✓ Matches total":`Entered ${fmtPrice(splitEntered)} of ${fmtPrice(finalTotal)}`}
+                  </span>
+                  <span style={{fontSize:13,fontWeight:700,color:splitMatches?"#34D399":"#F87171"}}>{fmtPrice(splitEntered)}</span>
+                </div>
+
+                {Object.entries(splitPay).some(([k,v])=>k!=="cash"&&Number(v)>0)&&(
+                  <div style={{marginBottom:14}}>
+                    <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REFERENCE NUMBER (OPTIONAL)</label>
+                    <input value={payRef} onChange={e=>setPayRef(e.target.value)} placeholder="e.g. GCash ref number"
+                      style={{width:"100%",padding:"10px 12px",fontSize:14,borderRadius:8}}/>
+                  </div>
+                )}
+              </>
             )}
 
             <div style={{display:"flex",gap:10,marginTop:8}}>
               <button className="btn-ghost" onClick={()=>setPayModal(false)} style={{flex:1,padding:12,fontSize:14,borderRadius:9}}>Cancel</button>
-              <button className="btn-gold" onClick={splitMode?paySplit:processPayment} disabled={payProcessing}
-                style={{flex:2,padding:12,fontSize:14,borderRadius:9,opacity:payProcessing?.7:1}}>
-                {payProcessing?"Processing…":"Confirm Payment ✦"}
+              <button className="btn-gold" onClick={splitMode?paySplit:processPayment}
+                disabled={payProcessing || (!splitMode && !splitMatches) || (splitMode && !splitSel.length)}
+                style={{flex:2,padding:12,fontSize:14,borderRadius:9,
+                  opacity:(payProcessing || (!splitMode && !splitMatches) || (splitMode && !splitSel.length))?.5:1,
+                  cursor:(payProcessing || (!splitMode && !splitMatches) || (splitMode && !splitSel.length))?"not-allowed":"pointer"}}>
+                {payProcessing?"Processing…":splitMode?"Pay Selected ✦":splitMatches?"Confirm Payment ✦":"Enter full amount"}
               </button>
             </div>
           </div>
@@ -805,6 +965,53 @@ export default function Cashier(){
             <div style={{display:"flex",gap:10}}>
               <button className="btn-ghost" onClick={()=>setDiscountModal(false)} style={{flex:1,padding:12,fontSize:14,borderRadius:9}}>Cancel</button>
               <button className="btn-gold" onClick={applyDiscount} style={{flex:1,padding:12,fontSize:14,borderRadius:9}}>Apply ✦</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── OTHER PAYABLES MODAL ── */}
+      {payableModal&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.88)",zIndex:300,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:400,width:"100%"}}>
+            <div style={{fontSize:18,fontWeight:700,marginBottom:4,color:"#FB923C"}}>＋ Other Payables</div>
+            <div style={{fontSize:13,color:"#555",marginBottom:20}}>{tabLabel(selectedTab)} · a charge added to the bill</div>
+
+            <div style={{marginBottom:14}}>
+              <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:8}}>TYPE</label>
+              <div style={{display:"flex",gap:8}}>
+                {[["amount","₱ Fixed amount"],["percent","% Percentage"]].map(([v,l])=>(
+                  <button key={v} onClick={()=>setPayableType(v)}
+                    style={{flex:1,padding:"9px 4px",background:payableType===v?"rgba(251,146,60,0.14)":SURFACE2,border:`1px solid ${payableType===v?"rgba(251,146,60,0.5)":BORDER}`,borderRadius:8,cursor:"pointer",fontSize:12.5,color:payableType===v?"#FB923C":"#888",fontFamily:"Inter,sans-serif",fontWeight:payableType===v?700:400}}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{marginBottom:14}}>
+              <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>
+                {payableType==="percent"?"PERCENTAGE (%)":"AMOUNT (₱)"}
+              </label>
+              <input value={payableValue} onChange={e=>setPayableValue(e.target.value)} type="number" inputMode="decimal"
+                placeholder={payableType==="percent"?"e.g. 3":"e.g. 150"}
+                style={{width:"100%",padding:"10px 12px",fontSize:14,borderRadius:8}}/>
+              {payableType==="percent"&&payableValue&&(
+                <div style={{fontSize:11,color:"#888",marginTop:5}}>= {fmtPrice(grandTotal*Number(payableValue)/100)} on this bill</div>
+              )}
+            </div>
+
+            <div style={{marginBottom:18}}>
+              <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REASON (REQUIRED)</label>
+              <input value={payableReason} onChange={e=>setPayableReason(e.target.value)}
+                placeholder="e.g. Broken glass, Card fee, Corkage"
+                style={{width:"100%",padding:"10px 12px",fontSize:14,borderRadius:8}}/>
+            </div>
+
+            <div style={{display:"flex",gap:10}}>
+              <button className="btn-ghost" onClick={()=>setPayableModal(false)} style={{flex:1,padding:12,fontSize:14,borderRadius:9}}>Cancel</button>
+              <button onClick={applyPayable}
+                style={{flex:1,padding:12,fontSize:14,borderRadius:9,background:"#FB923C",border:"none",color:"#160a04",fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>Add ＋</button>
             </div>
           </div>
         </div>
@@ -894,12 +1101,23 @@ export default function Cashier(){
                     <span>Discount</span><span>- {fmtPrice(receiptModal.discount_amt)}</span>
                   </div>
                 )}
+                {receiptModal.payable_amt>0&&(
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#FB923C",marginBottom:3}}>
+                    <span>Other payables{receiptModal.payable_note?` · ${receiptModal.payable_note}`:""}</span>
+                    <span>+ {fmtPrice(receiptModal.payable_amt)}</span>
+                  </div>
+                )}
                 <div style={{display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:700,borderTop:`1px solid ${GOLD_DIM}44`,paddingTop:8,marginTop:4}}>
                   <span>Total Paid</span>
                   <span style={{color:GOLD,fontFamily:"'Playfair Display',serif"}}>{fmtPrice(receiptModal.total)}</span>
                 </div>
                 <div style={{fontSize:12,color:"#555",marginTop:8,textAlign:"center"}}>
-                  {PAYMENT_METHODS.find(m=>m.value===receiptModal.payment_method)?.label||receiptModal.payment_method}
+                  {/* payment method(s): show the multi-pay breakdown if present */}
+                  {Array.isArray(receiptModal.payment_breakdown)&&receiptModal.payment_breakdown.length>0
+                    ? receiptModal.payment_breakdown.map(b=>
+                        `${PAYMENT_METHODS.find(m=>m.value===b.method)?.label||b.method} ${fmtPrice(b.amount)}`
+                      ).join("  ·  ")
+                    : (PAYMENT_METHODS.find(m=>m.value===receiptModal.payment_method)?.label||receiptModal.payment_method)}
                   {receiptModal.payment_ref&&<span> · Ref: {receiptModal.payment_ref}</span>}
                 </div>
               </div>

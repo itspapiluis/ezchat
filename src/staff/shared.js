@@ -41,6 +41,7 @@ export const ORDER_STATUS = {
   preparing: { label:"Preparing", color:"#60A5FA", icon:"🔥" },
   ready:     { label:"Ready",     color:"#34D399", icon:"✅" },
   served:    { label:"Served",    color:"#888",    icon:"🍽️" },
+  paid:      { label:"Paid",      color:"#C9A84C", icon:"💰" },
   voided:    { label:"Voided",    color:"#F87171", icon:"❌" },
 };
 

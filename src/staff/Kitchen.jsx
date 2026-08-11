@@ -152,39 +152,45 @@ export default function Kitchen(){
     await logAudit(`order_${action.next}`,"orders",order.id,{table_id:order.table_id},"kitchen");
   };
 
-  const openVoidModal = (order)=>{
-    setVoidModal(order);
+  // PER-ITEM: advance a single item (pending -> preparing -> ready).
+  // The kitchen can't make everything at once, so each dish moves on its own.
+  const advanceItem = async(item)=>{
+    const next = NEXT_ACTION[item.status]?.next;
+    if(!next) return;
+    const {error} = await supabase.from("order_items")
+      .update({status:next})
+      .eq("id",item.id)
+      .eq("voided",false);
+    if(error){ console.warn("advanceItem failed:",error.message); return; }
+    await logAudit(`item_${next}`,"order_items",item.id,{item:item.item_name},"kitchen");
+  };
+
+  const openVoidModal = (item)=>{
+    // PER-ITEM void: void just this dish (e.g. the sisig), not the whole order.
+    setVoidModal(item);
     setVoidReason("");
     setVoidNote("");
   };
 
   const _doVoid = async()=>{
-    if(!voidReason) return;
+    if(!voidReason || !voidModal) return;
     const reason = voidNote ? `${voidReason}: ${voidNote}` : voidReason;
-    // Void only THIS station's items.
-    // BUGFIX: this used to also set the whole ORDER to "voided". The kitchen
-    // voiding a burger made the guest's beer vanish from the Bar screen — while
-    // still being billed, because billing reads order_items (where the beer was
-    // never voided). The DB trigger now marks the order voided only when EVERY
-    // station has voided its items.
+    const item = voidModal;   // now a single order_item
     const {error:ve} = await supabase.from("order_items")
       .update({voided:true, void_reason:reason, voided_at:new Date().toISOString(), status:"voided"})
-      .eq("order_id",voidModal.id)
-      .eq("voided",false)
-      .in("category_type",["food"]);
+      .eq("id",item.id)
+      .eq("voided",false);
     if(ve){
       console.warn("void failed:",ve.message);
       setVoidModal(null);
       return;
     }
-    // BUGFIX: if items was undefined this called .insert(undefined) and threw.
-    const rows = (voidModal.items||[]).filter(i=>!i.voided).map(i=>({
-      order_item_id:i.id, tab_id:i.tab_id, table_id:i.table_id,
-      item_name:i.item_name, item_price:i.item_price, quantity:i.quantity,
+    await supabase.from("void_logs").insert({
+      order_item_id:item.id, tab_id:item.tab_id, table_id:item.table_id,
+      item_name:item.item_name, item_price:item.item_price, quantity:item.quantity,
       reason, voided_by:"kitchen"
-    }));
-    if(rows.length) await supabase.from("void_logs").insert(rows);
-    await logAudit("order_voided","orders",voidModal.id,{reason},"kitchen");
+    });
+    await logAudit("item_voided","order_items",item.id,{reason,item:item.item_name},"kitchen");
     setVoidModal(null);
     loadOrders();
   };
@@ -275,38 +281,44 @@ export default function Kitchen(){
                     {isNew&&<span style={{fontSize:10,background:"#34D399",color:"#080808",borderRadius:8,padding:"2px 8px",fontWeight:700}}>NEW!</span>}
                   </div>
                 </div>
-                {/* Items */}
+                {/* Items — each advances individually (kitchen can't cook all at once) */}
                 <div style={{padding:"12px 16px"}}>
-                  {order.items?.filter(i=>!i.voided).map(item=>(
-                    <div key={item.id} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${BORDER}`}}>
-                      <div>
-                        <div style={{fontSize:14,color:"#e8e0d0",fontWeight:500}}>{item.item_name}</div>
-                        <div style={{fontSize:11,color:"#555"}}>×{item.quantity}</div>
+                  {order.items?.filter(i=>!i.voided).map(item=>{
+                    const isPaid = !!item.paid_receipt_id;
+                    const iStatus = isPaid ? "paid" : item.status;
+                    const iAction = NEXT_ACTION[item.status];   // Accept / Mark Ready
+                    const ist = ORDER_STATUS[iStatus] || ORDER_STATUS.pending;
+                    return(
+                      <div key={item.id} style={{padding:"9px 0",borderBottom:`1px solid ${BORDER}`}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:iAction?7:0}}>
+                          <div>
+                            <div style={{fontSize:14,color:"#e8e0d0",fontWeight:500}}>{item.quantity}× {item.item_name}</div>
+                            <div style={{fontSize:11,color:ist.color,marginTop:2,fontWeight:600}}>{ist.icon} {ist.label}</div>
+                          </div>
+                          <div style={{fontSize:13,color:GOLD,fontWeight:600}}>{fmtPrice(item.subtotal)}</div>
+                        </div>
+                        {/* per-item actions (only while there's a next step) */}
+                        {iAction && (
+                          <div style={{display:"flex",gap:6}}>
+                            <button className="btn-gold" onClick={()=>advanceItem(item)}
+                              style={{flex:1,padding:"7px 0",fontSize:12.5,borderRadius:8,background:`linear-gradient(135deg,${iAction.color},${iAction.color}dd)`}}>
+                              {iAction.label}
+                            </button>
+                            <button onClick={()=>openVoidModal(item)}
+                              style={{padding:"7px 12px",background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:8,cursor:"pointer",fontSize:12.5,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
+                              Void
+                            </button>
+                          </div>
+                        )}
                       </div>
-                      <div style={{fontSize:13,color:GOLD,fontWeight:600}}>{fmtPrice(item.subtotal)}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                   {order.note&&(
                     <div style={{marginTop:8,fontSize:12,color:"#888",background:SURFACE2,borderRadius:8,padding:"6px 10px"}}>
                       📝 {order.note}
                     </div>
                   )}
                 </div>
-                {/* Actions */}
-                {sStatus!=="served"&&sStatus!=="voided"&&(
-                  <div style={{padding:"10px 16px",borderTop:`1px solid ${BORDER}`,display:"flex",gap:8}}>
-                    {action&&(
-                      <button className="btn-gold" onClick={()=>advanceStatus(order)}
-                        style={{flex:1,padding:"9px 0",fontSize:13,borderRadius:9,background:`linear-gradient(135deg,${action.color},${action.color}dd)`}}>
-                        {action.label}
-                      </button>
-                    )}
-                    <button onClick={()=>openVoidModal(order)}
-                      style={{padding:"9px 14px",background:"rgba(248,113,113,0.08)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#F87171",fontFamily:"Inter,sans-serif"}}>
-                      Void
-                    </button>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -317,8 +329,8 @@ export default function Kitchen(){
       {voidModal&&(
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:20,padding:28,maxWidth:400,width:"100%"}}>
-            <div style={{fontSize:16,fontWeight:700,marginBottom:4,color:"#F87171"}}>❌ Void Order</div>
-            <div style={{fontSize:13,color:"#666",marginBottom:16}}>{displayTable(voidModal)} · {voidModal?.items?.length} food item(s)</div>
+            <div style={{fontSize:16,fontWeight:700,marginBottom:4,color:"#F87171"}}>❌ Void Item</div>
+            <div style={{fontSize:13,color:"#666",marginBottom:16}}>{voidModal?.quantity}× {voidModal?.item_name}</div>
             <div style={{marginBottom:12}}>
               <label style={{fontSize:11,color:"#555",letterSpacing:1,display:"block",marginBottom:6}}>REASON</label>
               <select value={voidReason} onChange={e=>setVoidReason(e.target.value)}

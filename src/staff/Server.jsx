@@ -169,6 +169,19 @@ export default function Server(){
     if(!error) loadOrders();
   };
 
+  // PER-ITEM: serve one item — ONLY allowed when that item is "ready".
+  // A pending/preparing item has no serve button, so you can't serve what the
+  // kitchen/bar hasn't finished.
+  const markItemServed=async(item)=>{
+    if(item.status!=="ready") return;
+    const {error}=await supabase.from("order_items")
+      .update({status:"served"})
+      .eq("id",item.id)
+      .eq("status","ready")
+      .eq("voided",false);
+    if(!error) loadOrders();
+  };
+
   return(
     <div style={{minHeight:"100dvh",background:BG,color:"#e8e0d0",fontFamily:"Inter,sans-serif"}}
       onClick={()=>audioUnlocked.current=true}>
@@ -215,8 +228,8 @@ export default function Server(){
 
       <div style={{padding:"14px 12px 90px",maxWidth:900,margin:"0 auto"}}>
         {tab==="mine"   && <MyTables me={me} assigned={assigned} setAssigned={setAssigned} ordersForTable={ordersForTable}
-                             walkinOrders={walkinOrders} onServed={markServed}/>}
-        {tab==="serve"  && <ReadyToServe list={readyToServe} onServed={markServed}/>}
+                             walkinOrders={walkinOrders} onServed={markServed} onServeItem={markItemServed}/>}
+        {tab==="serve"  && <ReadyToServe list={readyToServe} onServeItem={markItemServed}/>}
         {tab==="walkin" && <GetOrder me={me} menu={menu} showToast={showToast}
                              onDone={()=>{ loadOrders(); setTimeout(()=>setTab("mine"),900); }}/>}
       </div>
@@ -231,7 +244,7 @@ export default function Server(){
 }
 
 // ── MY TABLES ────────────────────────────────────────────────────────────────
-function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServed}){
+function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServed,onServeItem}){
   const [editing,setEditing]=useState(false);
 
   const toggle=async(t)=>{
@@ -293,12 +306,17 @@ function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServ
                 ):os.map(o=>(
                   <div key={o.id} style={{marginBottom:8}}>
                     <div style={{fontSize:11,color:"#666",marginBottom:3}}>{o.user_name||"Guest"} · {fmtTime(o.created_at)}</div>
-                    {(o.order_items||[]).filter(i=>!i.voided).map(i=>(
-                      <div key={i.id} style={{display:"flex",gap:8,padding:"2px 0"}}>
-                        <span style={{fontSize:13,flex:1}}>{i.quantity}× {i.item_name}</span>
-                        <span style={{fontSize:11,color:i.status==="ready"?"#34D399":i.status==="served"?"#666":"#F59E0B"}}>{i.status}</span>
-                      </div>
-                    ))}
+                    {(o.order_items||[]).filter(i=>!i.voided).map(i=>{
+                      const isPaid=!!i.paid_receipt_id;
+                      const st=isPaid?"paid":i.status;
+                      const sc=st==="paid"?"#C9A84C":st==="ready"?"#34D399":st==="served"?"#666":"#F59E0B";
+                      return(
+                        <div key={i.id} style={{display:"flex",gap:8,padding:"2px 0"}}>
+                          <span style={{fontSize:13,flex:1}}>{i.quantity}× {i.item_name}</span>
+                          <span style={{fontSize:11,color:sc,fontWeight:600}}>{st}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 ))}
               </div>
@@ -323,7 +341,6 @@ function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServ
           {walkinOrders.map(o=>{
             const mine = o.placed_by===me;
             const items=(o.order_items||[]).filter(i=>!i.voided);
-            const hasReady=items.some(i=>i.status==="ready");
             return(
               <div key={o.id} style={{background:SURFACE,border:`1px solid ${mine?PINK:BORDER}`,borderRadius:12,padding:"12px 14px"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
@@ -338,19 +355,24 @@ function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServ
                 </div>
                 {items.length===0?(
                   <div style={{fontSize:12.5,color:"#555"}}>No items</div>
-                ):items.map(i=>(
-                  <div key={i.id} style={{display:"flex",gap:8,padding:"2px 0"}}>
-                    <span style={{fontSize:13,flex:1}}>{i.quantity}× {i.item_name}</span>
-                    <span style={{fontSize:11,color:i.status==="ready"?"#34D399":i.status==="served"?"#666":"#F59E0B"}}>{i.status}</span>
-                  </div>
-                ))}
-                {hasReady && onServed && (
-                  <button onClick={()=>onServed(o)}
-                    style={{marginTop:10,width:"100%",padding:"9px",background:"#34D399",border:"none",borderRadius:9,
-                      color:"#04160e",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
-                    Mark Served
-                  </button>
-                )}
+                ):items.map(i=>{
+                  const isPaid=!!i.paid_receipt_id;
+                  const st=isPaid?"paid":i.status;
+                  const sc=st==="paid"?"#C9A84C":st==="ready"?"#34D399":st==="served"?"#666":"#F59E0B";
+                  return(
+                    <div key={i.id} style={{display:"flex",gap:8,alignItems:"center",padding:"3px 0"}}>
+                      <span style={{fontSize:13,flex:1}}>{i.quantity}× {i.item_name}</span>
+                      {i.status==="ready"&&onServeItem?(
+                        <button onClick={()=>onServeItem(i)}
+                          style={{padding:"5px 12px",background:"#34D399",border:"none",borderRadius:7,color:"#04160e",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+                          Serve
+                        </button>
+                      ):(
+                        <span style={{fontSize:11,color:sc,fontWeight:600}}>{st}</span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             );
           })}
@@ -361,7 +383,7 @@ function MyTables({me,assigned,setAssigned,ordersForTable,walkinOrders=[],onServ
 }
 
 // ── READY TO SERVE ───────────────────────────────────────────────────────────
-function ReadyToServe({list,onServed}){
+function ReadyToServe({list,onServeItem}){
   if(!list.length){
     return(
       <div style={{textAlign:"center",padding:40,color:"#555"}}>
@@ -376,17 +398,19 @@ function ReadyToServe({list,onServed}){
         const walkin=o.table_tabs?.is_walkin;
         const label=walkin?`${o.table_tabs?.walkin_name||"Walk-in"} (walk-in)`:o.table_id;
         const readyItems=(o.order_items||[]).filter(i=>i.status==="ready"&&!i.voided);
+        if(!readyItems.length) return null;
         return(
           <div key={o.id} style={{background:SURFACE,border:`1px solid #34D39944`,borderRadius:12,padding:"12px 14px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-              <div style={{flex:1,fontSize:15,fontWeight:700,color:"#34D399"}}>{label}</div>
-              <button onClick={()=>onServed(o)}
-                style={{padding:"8px 16px",background:"#34D399",border:"none",borderRadius:9,color:"#04120b",fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
-                Mark Served
-              </button>
-            </div>
+            <div style={{fontSize:15,fontWeight:700,color:"#34D399",marginBottom:8}}>{label}</div>
+            {/* Each ready item gets its own Serve button — serve as you carry it over */}
             {readyItems.map(i=>(
-              <div key={i.id} style={{fontSize:13,color:"#ccc",padding:"2px 0"}}>{i.quantity}× {i.item_name}</div>
+              <div key={i.id} style={{display:"flex",alignItems:"center",gap:10,padding:"6px 0",borderTop:`1px solid ${BORDER}`}}>
+                <div style={{flex:1,fontSize:13.5,color:"#e8e0d0"}}>{i.quantity}× {i.item_name}</div>
+                <button onClick={()=>onServeItem(i)}
+                  style={{padding:"7px 14px",background:"#34D399",border:"none",borderRadius:8,color:"#04120b",fontSize:12.5,fontWeight:700,cursor:"pointer",fontFamily:"Inter,sans-serif"}}>
+                  Serve
+                </button>
+              </div>
             ))}
           </div>
         );
