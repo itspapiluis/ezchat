@@ -1711,6 +1711,19 @@ function CartProvider({children, tableId}){
           // PHASE 10: but NOT if staff have handed the table to a new group —
           // that new tab belongs to them, not to us.
           if(row.status === "open" && !tableHandedOver && (!cur || row.id !== cur.id)){
+            // AUTHORITATIVE guard: the tableHandedOver flag can be stale if the
+            // handover realtime was missed (phone asleep at home). Before
+            // adopting this new tab, verify our stored epoch still matches the
+            // table's CURRENT epoch. If the table was closed (epoch bumped), this
+            // new tab belongs to a NEW group — we must NOT reopen onto their bill.
+            // A legit "New Round" for the SAME group leaves the epoch unchanged,
+            // so it still adopts correctly.
+            const myEpoch  = getSessionEpoch();
+            const curEpoch = await getTableEpoch(tableId);
+            if(myEpoch != null && curEpoch != null && curEpoch !== myEpoch){
+              setTableHandedOver(true);
+              return;
+            }
             if(cur && cur.status === "closed"){
               const settledItems = await loadTabItems(cur.id);
               setPastRounds(p =>
@@ -1814,6 +1827,21 @@ function CartProvider({children, tableId}){
     if(tableHandedOver){
       return {success:false,error:"This table has been closed. Please scan the QR code again to start a new order."};
     }
+    // AUTHORITATIVE re-check: the tableHandedOver flag is set from realtime +
+    // an on-mount check, both of which can miss (phone asleep at home, wifi
+    // blip, backgrounded tab). If the table was closed and a NEW group opened a
+    // fresh tab, a stale phone could otherwise order onto their bill. So verify
+    // the phone's stored epoch against the table's CURRENT epoch in the DB right
+    // now, before inserting. Mismatch = this phone belongs to an old session.
+    // (Rescanning the QR is what refreshes the stored epoch — real presence.)
+    try{
+      const myEpoch  = getSessionEpoch();
+      const curEpoch = await getTableEpoch(tableId);
+      if(myEpoch != null && curEpoch != null && curEpoch !== myEpoch){
+        setTableHandedOver(true);
+        return {success:false,error:"This table has been closed. Please scan the QR code again to start a new order."};
+      }
+    }catch(_){ /* if the check itself fails, fall through to the other guards */ }
     // Once the bill is printed, the total is fixed. Adding items after that
     // means the cashier collects the wrong amount.
     if(tab.status==="bill_requested"){
