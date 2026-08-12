@@ -2427,6 +2427,13 @@ function AdminMenuEditor(){
   const [newCatName,setNewCatName]=useState("");
   const [newCatIcon,setNewCatIcon]=useState("🍽️");
   const [showAddCat,setShowAddCat]=useState(false);
+  // Mobile: below ~640px, stack categories above items instead of side-by-side.
+  const [isMobile,setIsMobile]=useState(typeof window!=="undefined"&&window.innerWidth<640);
+  useEffect(()=>{
+    const onResize=()=>setIsMobile(window.innerWidth<640);
+    window.addEventListener("resize",onResize);
+    return()=>window.removeEventListener("resize",onResize);
+  },[]);
   const {toasts,show:showToast}=useToast();
 
   useEffect(()=>{loadMenu();},[]);
@@ -2518,13 +2525,13 @@ function AdminMenuEditor(){
         ))}
       </div>
 
-      <div style={{flex:1,display:"flex",gap:12,overflow:"hidden",minHeight:0}}>
-        {/* Categories */}
-        <div style={{width:160,flexShrink:0,display:"flex",flexDirection:"column",gap:6}}>
+      <div style={{flex:1,display:"flex",flexDirection:isMobile?"column":"row",gap:12,overflow:isMobile?"auto":"hidden",minHeight:0}}>
+        {/* Categories — sidebar on desktop, horizontal strip on mobile */}
+        <div style={{width:isMobile?"auto":160,flexShrink:0,display:"flex",flexDirection:"column",gap:6}}>
           <div style={{fontSize:10,color:GOLD,letterSpacing:1,marginBottom:4}}>CATEGORIES</div>
-          <div style={{flex:1,overflowY:"auto"}}>
+          <div style={{flex:isMobile?"none":1,overflowY:isMobile?"visible":"auto",overflowX:isMobile?"auto":"visible",display:isMobile?"flex":"block",gap:isMobile?6:0,paddingBottom:isMobile?4:0}}>
             {filteredCats.map(c=>(
-              <div key={c.id} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 8px",background:activeCat===c.id?`rgba(201,168,76,0.1)`:SURFACE2,border:`1px solid ${activeCat===c.id?GOLD_DIM:BORDER}`,borderRadius:9,marginBottom:5,cursor:"pointer",transition:"all .15s"}} onClick={()=>setActiveCat(c.id)}>
+              <div key={c.id} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 8px",background:activeCat===c.id?`rgba(201,168,76,0.1)`:SURFACE2,border:`1px solid ${activeCat===c.id?GOLD_DIM:BORDER}`,borderRadius:9,marginBottom:isMobile?0:5,cursor:"pointer",transition:"all .15s",flexShrink:0}} onClick={()=>setActiveCat(c.id)}>
                 <span style={{fontSize:14}}>{c.icon}</span>
                 <span style={{flex:1,fontSize:12,color:activeCat===c.id?GOLD:"#ccc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span>
                 <button onClick={e=>{e.stopPropagation();deleteCategory(c.id);}} title="Delete category" style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",color:"#F87171",cursor:"pointer",fontSize:10,fontWeight:600,flexShrink:0,fontFamily:"Inter,sans-serif",borderRadius:5,padding:"3px 7px"}}>Delete</button>
@@ -2550,7 +2557,7 @@ function AdminMenuEditor(){
         </div>
 
         {/* Items */}
-        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:isMobile?"visible":"hidden",minWidth:0}}>
           {!activeCat?(
             <div style={{color:"#444",textAlign:"center",padding:40,fontSize:14}}>Select a category</div>
           ):(
@@ -2559,15 +2566,15 @@ function AdminMenuEditor(){
               <div style={{background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:12,padding:12,marginBottom:12,flexShrink:0}}>
                 <div style={{fontSize:10,color:GOLD,letterSpacing:1,marginBottom:8}}>ADD NEW ITEM</div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                  <input value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))} placeholder="Item name" style={{flex:2,minWidth:120,padding:"8px 10px",fontSize:13,borderRadius:7}}/>
-                  <input value={newItem.price} onChange={e=>setNewItem(p=>({...p,price:e.target.value}))} placeholder="₱ Price" type="number" style={{flex:1,minWidth:80,padding:"8px 10px",fontSize:13,borderRadius:7}}/>
-                  <input value={newItem.description} onChange={e=>setNewItem(p=>({...p,description:e.target.value}))} placeholder="Description (optional)" style={{flex:3,minWidth:140,padding:"8px 10px",fontSize:13,borderRadius:7}}/>
-                  <button className="btn-gold" onClick={addItem} style={{padding:"8px 14px",fontSize:13,borderRadius:7,flexShrink:0}}>Add ✦</button>
+                  <input value={newItem.name} onChange={e=>setNewItem(p=>({...p,name:e.target.value}))} placeholder="Item name" style={{flex:isMobile?"1 1 100%":2,minWidth:120,padding:"9px 10px",fontSize:13,borderRadius:7}}/>
+                  <input value={newItem.price} onChange={e=>setNewItem(p=>({...p,price:e.target.value}))} placeholder="₱ Price" type="number" style={{flex:isMobile?"1 1 100%":1,minWidth:80,padding:"9px 10px",fontSize:13,borderRadius:7}}/>
+                  <input value={newItem.description} onChange={e=>setNewItem(p=>({...p,description:e.target.value}))} placeholder="Description (optional)" style={{flex:isMobile?"1 1 100%":3,minWidth:140,padding:"9px 10px",fontSize:13,borderRadius:7}}/>
+                  <button className="btn-gold" onClick={addItem} style={{padding:"9px 14px",fontSize:13,borderRadius:7,flexShrink:0,width:isMobile?"100%":"auto"}}>Add ✦</button>
                 </div>
               </div>
 
               {/* Items list */}
-              <div style={{flex:1,overflowY:"auto"}}>
+              <div style={{flex:1,overflowY:isMobile?"visible":"auto"}}>
                 {loading?[1,2,3].map(i=><div key={i} className="skel" style={{height:50,marginBottom:8,borderRadius:10}}/>):
                 activeItems.length===0?<div style={{color:"#444",textAlign:"center",padding:32,fontSize:13}}>No items yet. Add one above.</div>:
                 activeItems.map(item=>(
@@ -2585,16 +2592,18 @@ function AdminMenuEditor(){
                         </div>
                       </div>
                     ):(
-                      <div style={{display:"flex",alignItems:"center",gap:8}}>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontSize:13,color:"#e8e0d0",fontWeight:500}}>{item.name}</div>
-                          {item.description&&<div style={{fontSize:11,color:"#555",marginTop:1}}>{item.description}</div>}
+                      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,color:"#e8e0d0",fontWeight:500}}>{item.name}</div>
+                            {item.description&&<div style={{fontSize:11,color:"#555",marginTop:1}}>{item.description}</div>}
+                          </div>
+                          <div style={{fontSize:14,fontWeight:700,color:GOLD,flexShrink:0}}>₱{Number(item.price).toLocaleString()}</div>
                         </div>
-                        <div style={{fontSize:14,fontWeight:700,color:GOLD,flexShrink:0}}>₱{Number(item.price).toLocaleString()}</div>
-                        <div style={{display:"flex",gap:4,flexShrink:0}}>
-                          <button onClick={()=>toggleAvailable(item)} title={item.available?"Mark as sold out":"Mark as available"} style={{background:item.available?"rgba(52,211,153,0.1)":"rgba(248,113,113,0.1)",border:`1px solid ${item.available?"rgba(52,211,153,0.4)":"rgba(248,113,113,0.4)"}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,color:item.available?"#34D399":"#F87171",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif",whiteSpace:"nowrap"}}>{item.available?"Available":"Sold out"}</button>
-                          <button onClick={()=>setEditingItem({...item})} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",color:"#aaa",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>Edit</button>
-                          <button onClick={()=>deleteItem(item.id,item.name)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:6,padding:"5px 10px",cursor:"pointer",color:"#F87171",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>Delete</button>
+                        <div style={{display:"flex",gap:6}}>
+                          <button onClick={()=>toggleAvailable(item)} title={item.available?"Mark as sold out":"Mark as available"} style={{flex:1,background:item.available?"rgba(52,211,153,0.1)":"rgba(248,113,113,0.1)",border:`1px solid ${item.available?"rgba(52,211,153,0.4)":"rgba(248,113,113,0.4)"}`,borderRadius:6,padding:"7px 4px",cursor:"pointer",fontSize:11,fontWeight:700,color:item.available?"#34D399":"#F87171",fontFamily:"Inter,sans-serif",whiteSpace:"nowrap"}}>{item.available?"Available":"Sold out"}</button>
+                          <button onClick={()=>setEditingItem({...item})} style={{flex:1,background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,padding:"7px 4px",cursor:"pointer",color:"#aaa",fontSize:11,fontWeight:600,fontFamily:"Inter,sans-serif"}}>Edit</button>
+                          <button onClick={()=>deleteItem(item.id,item.name)} style={{flex:1,background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:6,padding:"7px 4px",cursor:"pointer",color:"#F87171",fontSize:11,fontWeight:600,fontFamily:"Inter,sans-serif"}}>Delete</button>
                         </div>
                       </div>
                     )}
