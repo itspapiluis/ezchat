@@ -2468,7 +2468,8 @@ function AdminMenuEditor(){
     loadMenu();
   };
 
-  const deleteItem=async(id)=>{
+  const deleteItem=async(id,name)=>{
+    if(!window.confirm(`Delete "${name}" from the menu permanently?\n\nThis cannot be undone. To just mark it sold out, use the "Sold out" button instead.`)) return;
     setItems(p=>p.filter(i=>i.id!==id));
     await supabase.from("menu_items").delete().eq("id",id);
     showToast("Item removed");
@@ -2492,6 +2493,9 @@ function AdminMenuEditor(){
   };
 
   const deleteCategory=async(id)=>{
+    const cat=categories.find(c=>c.id===id);
+    const n=items.filter(i=>i.category_id===id).length;
+    if(!window.confirm(`Delete the "${cat?.name||"this"}" category permanently?${n?`\n\nThis may also remove the ${n} item(s) inside it.`:""}\n\nThis cannot be undone.`)) return;
     await supabase.from("menu_categories").delete().eq("id",id);
     if(activeCat===id)setActiveCat(null);
     showToast("Category removed");
@@ -2523,7 +2527,7 @@ function AdminMenuEditor(){
               <div key={c.id} style={{display:"flex",alignItems:"center",gap:4,padding:"7px 8px",background:activeCat===c.id?`rgba(201,168,76,0.1)`:SURFACE2,border:`1px solid ${activeCat===c.id?GOLD_DIM:BORDER}`,borderRadius:9,marginBottom:5,cursor:"pointer",transition:"all .15s"}} onClick={()=>setActiveCat(c.id)}>
                 <span style={{fontSize:14}}>{c.icon}</span>
                 <span style={{flex:1,fontSize:12,color:activeCat===c.id?GOLD:"#ccc",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.name}</span>
-                <button onClick={e=>{e.stopPropagation();deleteCategory(c.id);}} style={{background:"none",border:"none",color:"#F87171",cursor:"pointer",fontSize:13,flexShrink:0,fontFamily:"Inter,sans-serif",opacity:.7}} onMouseEnter={e=>e.currentTarget.style.opacity=1} onMouseLeave={e=>e.currentTarget.style.opacity=.7}>×</button>
+                <button onClick={e=>{e.stopPropagation();deleteCategory(c.id);}} title="Delete category" style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",color:"#F87171",cursor:"pointer",fontSize:10,fontWeight:600,flexShrink:0,fontFamily:"Inter,sans-serif",borderRadius:5,padding:"3px 7px"}}>Delete</button>
               </div>
             ))}
           </div>
@@ -2588,9 +2592,9 @@ function AdminMenuEditor(){
                         </div>
                         <div style={{fontSize:14,fontWeight:700,color:GOLD,flexShrink:0}}>₱{Number(item.price).toLocaleString()}</div>
                         <div style={{display:"flex",gap:4,flexShrink:0}}>
-                          <button onClick={()=>toggleAvailable(item)} title={item.available?"Mark unavailable":"Mark available"} style={{background:item.available?"rgba(52,211,153,0.08)":"rgba(248,113,113,0.08)",border:`1px solid ${item.available?"rgba(52,211,153,0.3)":"rgba(248,113,113,0.3)"}`,borderRadius:6,width:28,height:28,cursor:"pointer",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>{item.available?"✅":"❌"}</button>
-                          <button onClick={()=>setEditingItem({...item})} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,width:28,height:28,cursor:"pointer",color:"#888",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>✏️</button>
-                          <button onClick={()=>deleteItem(item.id)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.2)",borderRadius:6,width:28,height:28,cursor:"pointer",color:"#F87171",fontSize:13,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>×</button>
+                          <button onClick={()=>toggleAvailable(item)} title={item.available?"Mark as sold out":"Mark as available"} style={{background:item.available?"rgba(52,211,153,0.1)":"rgba(248,113,113,0.1)",border:`1px solid ${item.available?"rgba(52,211,153,0.4)":"rgba(248,113,113,0.4)"}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700,color:item.available?"#34D399":"#F87171",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif",whiteSpace:"nowrap"}}>{item.available?"Available":"Sold out"}</button>
+                          <button onClick={()=>setEditingItem({...item})} style={{background:SURFACE2,border:`1px solid ${BORDER}`,borderRadius:6,padding:"5px 10px",cursor:"pointer",color:"#aaa",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>Edit</button>
+                          <button onClick={()=>deleteItem(item.id,item.name)} style={{background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.25)",borderRadius:6,padding:"5px 10px",cursor:"pointer",color:"#F87171",fontSize:11,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Inter,sans-serif"}}>Delete</button>
                         </div>
                       </div>
                     )}
