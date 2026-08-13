@@ -555,6 +555,7 @@ function Entry({onEnter,wifiOk,tableId}){
   const [showGuide,setShowGuide]=useState(false);
   const [error,setError]=useState("");
   const [loading,setLoading]=useState(false);
+  const submitLock=React.useRef(false);   // synchronous double-submit guard
 
   const checkCode=async()=>{
     if(!accessCode.trim()){setAccessError("Please enter the access code.");return;}
@@ -583,6 +584,12 @@ function Entry({onEnter,wifiOk,tableId}){
     if(!firstName.trim()||!lastName.trim()){setError("Please enter your full name");return;}
     if(!gender){setError("Please select your gender");return;}
     if(!agreed){setError("Please accept the community guidelines");return;}
+    // Synchronous double-submit lock. setLoading(true) is async — two fast taps
+    // can both enter submit() before React re-renders the disabled button,
+    // creating two users + two "joined the chat" messages. This ref blocks the
+    // second call instantly, before any await.
+    if(submitLock.current) return;
+    submitLock.current = true;
     setLoading(true);
     try{
       const userId=randomId();
@@ -610,6 +617,7 @@ function Entry({onEnter,wifiOk,tableId}){
     }catch(e){
       setError("Connection error. Check your Wi-Fi and try again.");
       setLoading(false);
+      submitLock.current = false;   // release so the guest can retry
     }
   };
 
@@ -906,7 +914,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
   const typingTimeout=useRef(null);
 
   useEffect(()=>{ endRef.current?.scrollIntoView({behavior:"smooth"}); },[messages]);
-  useEffect(()=>{const t=setInterval(()=>setAnnIdx(i=>(i+1)%announcements.length),5000);return()=>clearInterval(t);},[announcements.length]);
+  useEffect(()=>{setAnnIdx(0);const t=setInterval(()=>setAnnIdx(i=>(i+1)%announcements.length),5000);return()=>clearInterval(t);},[announcements.length]);
 
   // ── Load blocked words from Supabase ──
   useEffect(()=>{
@@ -1213,7 +1221,7 @@ function ChatRoom({me,onLeave,showToast,notifications,tableId}){
         {/* Announcement + online row */}
         <div style={{flex:1,minWidth:0,overflow:"hidden"}}>
           <div style={{fontSize:11,color:GOLD,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}} className="ann-bar">
-            📢 {announcements[annIdx]}
+            {tableId ? `📍 ${tableId}` : "📢"} {announcements[annIdx % announcements.length] || announcements[0] || "Welcome to EasyCart!"}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:4,marginTop:1}}>
             <div style={{width:6,height:6,borderRadius:"50%",background:"#34D399",flexShrink:0}}/>
