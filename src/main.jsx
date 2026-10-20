@@ -9,6 +9,11 @@ import Cashier from './staff/Cashier.jsx'
 import Server from './staff/Server.jsx'
 import { hasStaffRole } from './staff/shared.js'
 
+// ── ATTENDANCE MODULE (lazy: only downloaded when someone opens /clock or /hr) ──
+const ClockPage = React.lazy(() => import('./attendance/ClockPage.jsx'))
+const HRPage = React.lazy(() => import('./attendance/HRPage.jsx'))
+const attendanceFallback = <div style={{ position: 'fixed', inset: 0, background: '#080808' }} />
+
 // ── GLOBAL ERROR BOUNDARY ────────────────────────────────────────────────────
 // If ANY component throws during render, React normally unmounts everything and
 // leaves a BLANK WHITE SCREEN with the real cause hidden in a minified stack.
@@ -77,6 +82,8 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/server" element={
           <ProtectedRoute allowedRole="server"><Server/></ProtectedRoute>
         }/>
+        <Route path="/clock" element={<React.Suspense fallback={attendanceFallback}><ClockPage/></React.Suspense>}/>
+        <Route path="/hr" element={<React.Suspense fallback={attendanceFallback}><HRPage/></React.Suspense>}/>
         <Route path="*" element={<Navigate to="/" replace/>}/>
       </Routes>
     </BrowserRouter>
