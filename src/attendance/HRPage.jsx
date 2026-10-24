@@ -225,9 +225,9 @@ function ShiftsTab() {
       <div style={{ ...ui.card, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
         <div><label style={ui.label}>FROM</label><input type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} style={ui.input} /></div>
         <div><label style={ui.label}>TO</label><input type="date" value={to} min={from} onChange={(e) => e.target.value && setTo(e.target.value)} style={ui.input} /></div>
-        <div>
+        <div style={{ maxWidth: "100%" }}>
           <label style={ui.label}>STAFF</label>
-          <select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} style={ui.input}>
+          <select value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)} style={{ ...ui.input, maxWidth: "100%" }}>
             <option value="">Everyone</option>
             {staffOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
           </select>
@@ -427,6 +427,9 @@ function StaffTab() {
         </div>
         <button type="submit" disabled={busy} style={{ ...ui.gold, opacity: busy ? 0.6 : 1 }}>Add staff</button>
       </form>
+      <div style={{ fontSize: 12, color: "#777", margin: "-2px 2px 12px", lineHeight: 1.5 }}>
+        Servers: type the name exactly as it appears in your Server list, so their tables link up.
+      </div>
       {err && <div style={ui.err}>{err}</div>}
       {ok && <div style={ui.ok}>{ok}</div>}
       {rows.length === 0 && !err && <div style={{ textAlign: "center", color: "#555", padding: 30, fontSize: 14 }}>No staff yet. Add the first one above.</div>}

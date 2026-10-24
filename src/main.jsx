@@ -12,6 +12,7 @@ import { hasStaffRole } from './staff/shared.js'
 // ── ATTENDANCE MODULE (lazy: only downloaded when someone opens /clock or /hr) ──
 const ClockPage = React.lazy(() => import('./attendance/ClockPage.jsx'))
 const HRPage = React.lazy(() => import('./attendance/HRPage.jsx'))
+const AttendanceGate = React.lazy(() => import('./attendance/AttendanceGate.jsx'))
 const attendanceFallback = <div style={{ position: 'fixed', inset: 0, background: '#080808' }} />
 
 // ── GLOBAL ERROR BOUNDARY ────────────────────────────────────────────────────
@@ -45,9 +46,26 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// If the attendance gate cannot load or crashes, open the staff screen anyway.
+// A gate problem must never stop the kitchen, bar or cashier from working.
+class GateBoundary extends React.Component {
+  constructor(p){ super(p); this.state = { failed: false }; }
+  static getDerivedStateFromError(){ return { failed: true }; }
+  componentDidCatch(err){ console.warn("EZChat: attendance gate unavailable, opening the screen without it —", err); }
+  render(){ return this.state.failed ? this.props.fallback : this.props.children; }
+}
+
 function ProtectedRoute({ children, allowedRole }){
   if(!hasStaffRole(allowedRole)) return <Navigate to="/staff" replace/>;
-  return children;
+  // Attendance gate: dormant until switched on in the database, and opens the
+  // screen normally if anything goes wrong.
+  return (
+    <GateBoundary fallback={children}>
+      <React.Suspense fallback={attendanceFallback}>
+        <AttendanceGate>{children}</AttendanceGate>
+      </React.Suspense>
+    </GateBoundary>
+  );
 }
 
 // ── LAST-RESORT SAFETY NET ───────────────────────────────────────────────────

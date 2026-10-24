@@ -4,6 +4,7 @@ import {
   supabase, fmtTime, fmtPrice, playAlert, clearStaffSession,
   ConnectionBanner, TABLE_LIST,
 } from "./shared.js";
+import { getAttendanceSession } from "../attendance/session.js";
 
 const BG="#0a0a08", SURFACE="#151510", SURFACE2="#1e1e16", BORDER="#2a2a20";
 const GOLD="#C9A84C", PINK="#F472B6";
@@ -198,7 +199,7 @@ export default function Server(){
           <div style={{fontFamily:"'Playfair Display',serif",fontSize:18,fontWeight:900,color:GOLD}}>Server</div>
           <div style={{fontSize:11.5,color:"#777"}}>Signed in as <b style={{color:PINK}}>{me}</b></div>
         </div>
-        <button onClick={()=>setMe("")} style={{padding:"6px 12px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:8,color:"#888",fontSize:12,cursor:"pointer"}}>Switch</button>
+        {!getAttendanceSession()&&<button onClick={()=>setMe("")} style={{padding:"6px 12px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:8,color:"#888",fontSize:12,cursor:"pointer"}}>Switch</button>}
         <button onClick={logout} style={{padding:"6px 12px",background:SURFACE,border:`1px solid ${BORDER}`,borderRadius:8,color:"#888",fontSize:12,cursor:"pointer"}}>Logout</button>
       </div>
 
