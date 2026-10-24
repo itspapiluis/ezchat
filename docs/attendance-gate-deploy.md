@@ -29,6 +29,8 @@ When the gate is ON, nobody can use the Kitchen, Bar, Cashier or Server screen u
 | `src/staff/Server.jsx` | changed (+2/-1) |
 | `supabase/attendance-gate.sql` | new (additive, safe to re-run) |
 | `supabase/attendance-gate-rollback.sql` | new |
+| `supabase/attendance-servers.sql` | new (HR ticks who is a server; additive, safe to re-run) |
+| `supabase/attendance-servers-rollback.sql` | new |
 | `docs/attendance-gate-deploy.md` | this file |
 
 ## Deploy steps (PowerShell, in `C:\Projects\ezchat`, branch `attendance-gate`)
@@ -48,6 +50,12 @@ npm run build
 It must end with "built in". No new packages are needed.
 
 **3. Database.** Supabase, SQL Editor, new query, paste `supabase/attendance-gate.sql`, Run. Expect "Success. No rows returned". The gate is still OFF.
+
+**3b. Servers managed from HR (recommended).** Supabase, SQL Editor, new query, paste `supabase/attendance-servers.sql`, Run. Expect "Success. No rows returned".
+- Existing servers whose name matches an HR account are marked as servers automatically. No `servers` row is ever deleted, so table assignments stay intact.
+- From then on, in `/hr` > Staff, tick **Works as server** when adding someone (or tap **Make server** on an existing person). They appear in the Server list automatically. Deactivating or unticking hides them from the Server list.
+- Undo with `supabase/attendance-servers-rollback.sql`. Rows it created or hid in `servers` are not changed back.
+- If you skip this step, everything still works; HR just shows the old "type the name exactly" hint.
 
 **4. Make sure EVERY person has an account.** Open `/hr`, Staff tab, and add everyone who works at the bar (kitchen, bar, cashier, servers, and yourself if you use these screens), each with a name and a 6-digit PIN.
 - Servers: type the name **exactly** as it appears in your Server list.

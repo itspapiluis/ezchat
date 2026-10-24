@@ -373,11 +373,19 @@ function StaffTab() {
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
   const [busy, setBusy] = useState(false);
+  const [isServer, setIsServer] = useState(false);
+  const [flags, setFlags] = useState(null); // { staffId: true/false }, or null if attendance-servers.sql has not been run
 
   const load = useCallback(async () => {
     const { data, error } = await sb.rpc("attendance_hr_staff");
     if (error) setErr(/forbidden/i.test(error.message) ? "This account has no HR access." : "Could not load staff.");
     else setRows(data || []);
+    const f = await sb.rpc("attendance_hr_server_flags");
+    if (f.error) { setFlags(null); } else {
+      const m = {};
+      (f.data || []).forEach((x) => { m[x.id] = !!x.is_server; });
+      setFlags(m);
+    }
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -390,11 +398,18 @@ function StaffTab() {
       if (!window.confirm(`A staff member named "${n}" already exists. Staff pick their name from a list, so two identical names will be confusing. Add anyway?`)) return;
     }
     setBusy(true);
-    const { error } = await sb.rpc("attendance_hr_create_staff", { p_name: n, p_pin: pin });
+    let error;
+    if (flags) {
+      ({ error } = await sb.rpc("attendance_hr_add_staff", { p_name: n, p_pin: pin, p_is_server: isServer }));
+    } else if (isServer) {
+      error = { message: "Server option is not set up yet. Run attendance-servers.sql in Supabase first." };
+    } else {
+      ({ error } = await sb.rpc("attendance_hr_create_staff", { p_name: n, p_pin: pin }));
+    }
     setBusy(false);
     if (error) { setErr(error.message || "Could not add."); return; }
-    setOk(`${n} added. Give them their PIN privately.`);
-    setName(""); setPin("");
+    setOk(`${n} added${isServer ? " as a server" : ""}. Give them their PIN privately.`);
+    setName(""); setPin(""); setIsServer(false);
     load();
   }
 
@@ -405,6 +420,14 @@ function StaffTab() {
     const { error } = await sb.rpc("attendance_hr_set_pin", { p_staff: r.id, p_pin: p.trim() });
     if (error) setErr(error.message || "Could not reset PIN.");
     else setOk(`PIN reset for ${r.name}.`);
+  }
+
+  async function toggleServer(r) {
+    setErr(""); setOk("");
+    const next = !flags[r.id];
+    const { error } = await sb.rpc("attendance_hr_set_server", { p_staff: r.id, p_server: next });
+    if (error) setErr("Could not update.");
+    else { setOk(next ? `${r.name} is now a server.` : `${r.name} is no longer a server.`); load(); }
   }
 
   async function toggle(r) {
@@ -425,10 +448,17 @@ function StaffTab() {
           <label style={ui.label}>6-DIGIT PIN</label>
           <input value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" placeholder="e.g. 482915" style={{ ...ui.input, width: "100%" }} />
         </div>
+        {flags && (
+          <label style={{ fontSize: 13, color: "#ccc", display: "flex", alignItems: "center", gap: 6, paddingBottom: 10 }}>
+            <input type="checkbox" checked={isServer} onChange={(e) => setIsServer(e.target.checked)} /> Works as server
+          </label>
+        )}
         <button type="submit" disabled={busy} style={{ ...ui.gold, opacity: busy ? 0.6 : 1 }}>Add staff</button>
       </form>
       <div style={{ fontSize: 12, color: "#777", margin: "-2px 2px 12px", lineHeight: 1.5 }}>
-        Servers: type the name exactly as it appears in your Server list, so their tables link up.
+        {flags
+          ? "Tick \"Works as server\" for anyone who takes tables. They are added to the Server list automatically."
+          : "Servers: type the name exactly as it appears in your Server list, so their tables link up."}
       </div>
       {err && <div style={ui.err}>{err}</div>}
       {ok && <div style={ui.ok}>{ok}</div>}
@@ -437,8 +467,15 @@ function StaffTab() {
         <div key={r.id} style={{ ...ui.card, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", opacity: r.active ? 1 : 0.55 }}>
           <div style={{ flex: 1, minWidth: 140 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>{r.name}</div>
-            <div style={{ fontSize: 11, color: r.active ? "#34D399" : "#777" }}>{r.active ? "Active" : "Inactive"}</div>
+            <div style={{ fontSize: 11, color: r.active ? "#34D399" : "#777" }}>
+              {r.active ? "Active" : "Inactive"}{flags && flags[r.id] ? " · Server" : ""}
+            </div>
           </div>
+          {flags && (
+            <button style={{ ...ui.ghost, ...(flags[r.id] ? { borderColor: GOLD, color: GOLD } : {}) }} onClick={() => toggleServer(r)}>
+              {flags[r.id] ? "Server ✓" : "Make server"}
+            </button>
+          )}
           <button style={ui.ghost} onClick={() => resetPin(r)}>Reset PIN</button>
           <button style={ui.ghost} onClick={() => toggle(r)}>{r.active ? "Deactivate" : "Activate"}</button>
         </div>
