@@ -6,7 +6,7 @@
 -- Rules (change the numbers in reservation_settings / the functions below):
 --   * a guest can book any day from TODAY to the LAST DAY OF THIS MONTH
 --     (Manila time). Next month opens when the month starts.
---   * arrival times: 6:00 PM to 11:30 PM, every 30 minutes
+--   * arrival times: 6:00 PM to 10:30 PM, every 30 minutes
 --   * a table is held 30 minutes after the arrival time, then it is released
 --   * one active booking per table per date
 --   * max 2 active bookings per phone number
@@ -158,7 +158,7 @@ begin
   if not found then return jsonb_build_object('ok', false, 'error', 'table'); end if;
   if p_guests is null or p_guests < 1 or p_guests > tb.capacity then return jsonb_build_object('ok', false, 'error', 'guests', 'max', tb.capacity); end if;
   if p_date is null or p_date < today or p_date > mx then return jsonb_build_object('ok', false, 'error', 'date'); end if;
-  if p_time is null or p_time < time '18:00' or p_time > time '23:30'
+  if p_time is null or p_time < time '18:00' or p_time > time '22:30'
      or extract(minute from p_time) not in (0, 30) or extract(second from p_time) <> 0 then
     return jsonb_build_object('ok', false, 'error', 'time');
   end if;

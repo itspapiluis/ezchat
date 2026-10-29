@@ -37,7 +37,7 @@ export const ERROR_TEXT = {
   table: "That table is not available for booking.",
   guests: "That table is too small for your group. Pick a bigger one.",
   date: "Reservations are open from today until the end of this month.",
-  time: "Pick an arrival time between 6:00 PM and 11:30 PM.",
+  time: "Pick an arrival time between 6:00 PM and 10:30 PM.",
   past: "That time has already passed. Pick a later time.",
   taken: "Someone just reserved that table. Please pick another one.",
   limit: "You already have 2 active reservations. Please use or cancel one first.",
@@ -74,6 +74,6 @@ export function fmtPhone(p) {
 export const peso = (n) => "₱" + Number(n).toLocaleString("en-US");
 export const SLOTS = (() => {
   const out = [];
-  for (let h = 18; h <= 23; h++) for (const m of [0, 30]) out.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
-  return out; // 18:00 ... 23:30
+  for (let h = 18; h <= 22; h++) for (const m of [0, 30]) out.push(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`);
+  return out; // 18:00 ... 22:30
 })();

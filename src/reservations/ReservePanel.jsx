@@ -216,7 +216,7 @@ export default function ReservePanel({ onClose }) {
     <>
       <div style={card}>
         <div style={{ fontSize: 13, color: "#999", lineHeight: 1.6, marginBottom: 14 }}>
-          Reserve any day from today until <b style={{ color: GOLD }}>{fmtDateLong(cfg.max_date).replace(/, \d{4}$/, "")}</b>. Open 6 PM to 12 midnight.
+          Reserve any day from today until <b style={{ color: GOLD }}>{fmtDateLong(cfg.max_date).replace(/, \d{4}$/, "")}</b>. Reservations accepted from 6 PM to 10:30 PM.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 14 }}>
           <div>

@@ -30,7 +30,7 @@ Open `/?admin=1` > Reservations > Turn ON, then try `/?reserve=1` on your phone.
 Merge to main. Point Facebook / QR links to `ezchat-bar.vercel.app/?reserve=1`.
 
 ## Rules (enforced by the database)
-- Book from today to the last day of this month. Arrival 6:00 PM to 11:30 PM, every 30 minutes.
+- Book from today to the last day of this month. Arrival 6:00 PM to 10:30 PM, every 30 minutes.
 - Table held 30 minutes after the reserved time, then it is released. Staff marking "Arrived" keeps it.
 - One active booking per table per date. Max 2 active bookings per phone number.
 - Guests cancel or look up with booking code + last 4 digits of their phone.
