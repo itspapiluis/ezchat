@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "./lib/supabase.js";
 import { logError, installErrorHandlers, rateLimit, verifyStaffPin, useConnection } from "./lib/prod.js";
+// Reservations (new, separate files in src/reservations/). Lazy-loaded so guests who don't open it download nothing extra.
+import { useReservationsEnabled } from "./reservations/useReservationsEnabled.js";
+import { setAdminPin } from "./reservations/adminSession.js";
+const ReservePanel = React.lazy(()=>import("./reservations/ReservePanel.jsx"));
+const AdminReservations = React.lazy(()=>import("./reservations/AdminReservations.jsx"));
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 // EGRESS FIX: the logo used to be served from SUPABASE STORAGE. It appears on
@@ -399,6 +404,9 @@ function Loading({label="CONNECTING…",sub=""}){
 // ── Landing page ──────────────────────────────────────────────────────────────
 function Landing({onJoin,onAdminTap,tableId}){
   const [scroll,setScroll]=useState(0);
+  // Reservations: buttons show only when switched ON in Admin > Reservations. ?reserve=1 opens it directly.
+  const resOn=useReservationsEnabled();
+  const [showReserve,setShowReserve]=useState(()=>{try{return new URLSearchParams(window.location.search).get("reserve")==="1";}catch(e){return false;}});
   const [annIdx,setAnnIdx]=useState(0);
   const [announcements,setAnnouncements]=useState([
     "🥂 Welcome to EasyCart Barcade & Lounge!",
@@ -444,7 +452,8 @@ function Landing({onJoin,onAdminTap,tableId}){
           <Logo size={32} showText={true}/>
         </div>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
-          <button className="btn-ghost" style={{padding:"7px 16px",fontSize:13}} onClick={()=>document.getElementById("how")?.scrollIntoView({behavior:"smooth"})}>How It Works</button>
+          <button className={"btn-ghost"+(resOn?" desktop-only":"")} style={{padding:"7px 16px",fontSize:13}} onClick={()=>document.getElementById("how")?.scrollIntoView({behavior:"smooth"})}>How It Works</button>
+          {resOn&&<button className="btn-ghost" onClick={()=>setShowReserve(true)} style={{padding:"7px 14px",fontSize:13,borderColor:GOLD_DIM,color:GOLD}}>Reserve a Table</button>}
           <button className="btn-gold" onClick={onJoin} style={{padding:"8px 20px",fontSize:13}}>Join Chat</button>
         </div>
       </nav>
@@ -480,6 +489,7 @@ function Landing({onJoin,onAdminTap,tableId}){
         </p>
         <div style={{display:"flex",gap:12,flexWrap:"wrap",justifyContent:"center"}}>
           <button className="btn-gold" onClick={onJoin} style={{padding:"14px 38px",fontSize:16,borderRadius:10}}>Join the Chat ✦</button>
+          {resOn&&<button className="btn-ghost" onClick={()=>setShowReserve(true)} style={{padding:"14px 28px",fontSize:15,borderRadius:10,borderColor:GOLD_DIM,color:GOLD}}>Reserve a Table</button>}
           <button className="btn-ghost" style={{padding:"14px 28px",fontSize:15,borderRadius:10}} onClick={()=>document.getElementById("how")?.scrollIntoView({behavior:"smooth"})}>How It Works</button>
         </div>
         <div style={{marginTop:52,display:"flex",gap:36,flexWrap:"wrap",justifyContent:"center"}}>
@@ -492,6 +502,16 @@ function Landing({onJoin,onAdminTap,tableId}){
         </div>
       </section>
 
+      {resOn&&(
+        <section id="reserve" style={{padding:"56px 5% 0",maxWidth:1100,margin:"0 auto"}}>
+          <div style={{textAlign:"center",padding:"38px 24px",borderRadius:22,border:`1px solid ${GOLD_DIM}66`,background:"radial-gradient(ellipse 90% 120% at 50% 0%,rgba(201,168,76,0.10) 0%,rgba(201,168,76,0.02) 60%,transparent 100%)"}}>
+            <div style={{fontSize:11,color:GOLD,letterSpacing:2,marginBottom:10}}>RESERVATIONS</div>
+            <h2 style={{fontFamily:"'Playfair Display',serif",fontSize:"clamp(26px,4vw,40px)",fontWeight:700,marginBottom:12}}>Your table, <span className="gold-text">waiting for you</span></h2>
+            <p style={{color:"#777",fontSize:15,lineHeight:1.7,maxWidth:520,margin:"0 auto 24px"}}>Choose your date and arrival time, pick your spot on the floor plan, and we'll hold it for you. No sign-up needed.</p>
+            <button className="btn-gold" onClick={()=>setShowReserve(true)} style={{padding:"14px 34px",fontSize:16,borderRadius:10}}>Reserve a Table ✦</button>
+          </div>
+        </section>
+      )}
       <section id="how" style={{padding:"70px 5%",maxWidth:1100,margin:"0 auto"}}>
         <div style={{textAlign:"center",marginBottom:52}}>
           <div style={{fontSize:11,color:GOLD,letterSpacing:2,marginBottom:10}}>THE PROCESS</div>
@@ -537,6 +557,7 @@ function Landing({onJoin,onAdminTap,tableId}){
         <span>{VENUE_NAME} · {VENUE_LOCATION}</span>
         <span onClick={onAdminTap} style={{cursor:"default",userSelect:"none"}}>Venue Wi-Fi secured · No accounts</span>
       </footer>
+      {showReserve&&<React.Suspense fallback={null}><ReservePanel onClose={()=>setShowReserve(false)}/></React.Suspense>}
     </div>
   );
 }
@@ -2645,7 +2666,7 @@ function AdminLogin({onSuccess,onBack}){
       return;
     }
     const ok = await verifyStaffPin("admin",p);
-    if(ok){setFails(0);setLockedUntil(0);onSuccess();}
+    if(ok){setFails(0);setLockedUntil(0);setAdminPin(p);onSuccess();}
     else{
       const n=fails+1;
       setFails(n);
@@ -2906,7 +2927,7 @@ function AdminPanel({onLogout}){
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:`1px solid ${BORDER}`,background:SURFACE,overflowX:"auto",height:46,boxSizing:"border-box"}}>
-        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["daily","🧾 Daily"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["backup","💾 Backup"],["alerts","🔔 Alerts"],["settings","⚙️ Settings"]].map(([v,l])=>(
+        {[["dashboard","📊 Dashboard"],["announcements","📢 Announce"],["users","👥 Guests"],["messages","💬 Messages"],["filter","🛡️ Word Filter"],["menu","🍽️ Menu"],["daily","🧾 Daily"],["reports","📈 Reports"],["analytics","📉 Analytics"],["voids","❌ Voids"],["staff","👥 Staff"],["backup","💾 Backup"],["alerts","🔔 Alerts"],["reservations","📅 Reservations"],["settings","⚙️ Settings"]].map(([v,l])=>(
           <button key={v} className={`tab-btn ${tab===v?"active":""}`} onClick={()=>setTab(v)} style={{fontSize:11,padding:"10px 8px",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -3151,6 +3172,13 @@ function AdminPanel({onLogout}){
         </div>
       )}
 
+      {/* ── RESERVATIONS ── */}
+      {tab==="reservations"&&(
+        <div style={{maxWidth:960,margin:"0 auto"}}>
+          <Suspensed C={AdminReservations}/>
+        </div>
+      )}
+
       {/* ── SETTINGS ── */}
       {tab==="settings"&&(
         <div style={{maxWidth:700,margin:"0 auto"}}>
@@ -3233,6 +3261,11 @@ export default function App(){
       // Phase 7 — staff login sends admins here with ?admin=1
       if(new URLSearchParams(window.location.search).get("admin")==="1"){
         setScreen("admin");
+        return;
+      }
+      // Shared reservation link (e.g. from Facebook): always show the landing page
+      if(new URLSearchParams(window.location.search).get("reserve")==="1"){
+        setTimeout(()=>{setWifiOk(true);setScreen("landing");},300);
         return;
       }
       // Try to restore existing session
