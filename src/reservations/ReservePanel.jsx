@@ -138,7 +138,9 @@ export default function ReservePanel({ onClose }) {
   }
 
   const holdMin = cfg?.hold_minutes || 30;
+  const autoRel = cfg?.auto_release !== false;
   const holdNote = (t) => {
+    if (!autoRel) return "Please arrive on time. If you will be late, call or message us so we can keep your table.";
     if (!t) return `Your table is held for ${holdMin} minutes after your reservation time. After that it may be released to other guests.`;
     const [h, m] = t.split(":").map(Number);
     const end = h * 60 + m + holdMin;
@@ -281,7 +283,7 @@ export default function ReservePanel({ onClose }) {
       </div>
 
       <div style={{ ...card, background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.25)", color: "#e1be7d", fontSize: 13, lineHeight: 1.6 }}>
-        ⏱ Your table is held for <b>{holdMin} minutes</b> after your reservation time. After that it may be released to other guests.
+        ⏱ {autoRel ? <>Your table is held for <b>{holdMin} minutes</b> after your reservation time. After that it may be released to other guests.</> : "Please arrive on time. If you will be late, call or message us so we can keep your table."}
         Prices are consumable amounts (what you spend on food and drinks).
       </div>
 

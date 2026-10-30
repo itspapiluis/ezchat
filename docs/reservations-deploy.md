@@ -32,6 +32,8 @@ Merge to main. Point Facebook / QR links to `ezchat-bar.vercel.app/?reserve=1`.
 ## Rules (enforced by the database)
 - Book from today to the last day of this month. Arrival 6:00 PM to 10:30 PM, every 30 minutes.
 - Table held 30 minutes after the reserved time, then it is released. Staff marking "Arrived" keeps it.
+- Admin > Reservations has an **Auto-release** switch. OFF = nothing expires by itself (staff clear each booking). Expired rows get a **Restore** button (works while Auto-release is OFF).
+- Re-run `supabase/reservations.sql` after updating: it adds the auto_release setting (safe to repeat).
 - One active booking per table per date. Max 2 active bookings per phone number.
 - Guests cancel or look up with booking code + last 4 digits of their phone.
 - Prices are consumable amounts. KTV: 3,500 for the first 3 hours + 350 per extra hour.

@@ -29,6 +29,8 @@ export const adminCreate = (pin, b) =>
   rpc("reservation_admin_create", { p_pin: pin, p_date: b.date, p_time: b.time, p_table: b.table, p_name: b.name, p_phone: b.phone, p_guests: b.guests });
 export const adminSetEnabled = (pin, on) => rpc("reservation_admin_set_enabled", { p_pin: pin, p_enabled: on });
 export const getEnabled = () => rpc("reservation_enabled");
+export const getAutoRelease = () => rpc("reservation_auto_release");
+export const adminSetAutoRelease = (pin, on) => rpc("reservation_admin_set_auto_release", { p_pin: pin, p_on: on });
 
 export const ERROR_TEXT = {
   disabled: "Online reservations are not open right now.",

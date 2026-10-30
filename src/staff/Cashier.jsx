@@ -293,19 +293,55 @@ export default function Cashier(){
     if(!selectedTab || selectedTab.status!=="closed") return;
 
     // Guard: a table may only ever have one live tab (the DB enforces this too).
-    const {data:live} = await supabase.from("table_tabs")
+    // If one already exists (a guest or another cashier just started it), open THAT one
+    // instead of showing an error.
+    const openLive = async()=>{
+      const {data:live} = await supabase.from("table_tabs")
+        .select("*").eq("table_id",selectedTab.table_id)
+        .in("status",["open","bill_requested"]).limit(1);
+      return live?.[0]||null;
+    };
+    const existing = await openLive();
+    if(existing){
+      await loadTabs();
+      setSelectedTab(existing);
+      return;
+    }
+
+    // Only the table's MOST RECENT bill can start a new round. An older bill belongs to a
+    // group that may already have left.
+    const {data:newer} = await supabase.from("table_tabs")
       .select("id").eq("table_id",selectedTab.table_id)
-      .in("status",["open","bill_requested"]).limit(1);
-    if(live?.length){
-      alert("This table already has an open tab.");
+      .gt("opened_at",selectedTab.opened_at).limit(1);
+    if(newer?.length){
+      alert("This is an older bill. Open the table's latest bill instead.");
       loadTabs();
       return;
     }
 
+    // If staff pressed Close Table after this bill was paid, the guests have left and their
+    // phones are locked out. The next group opens its own tab by scanning the QR code.
+    if(!selectedTab.is_walkin){
+      const {data:sess} = await supabase.from("table_sessions")
+        .select("closed_at").eq("table_id",selectedTab.table_id).maybeSingle();
+      if(sess?.closed_at && selectedTab.closed_at && new Date(sess.closed_at) > new Date(selectedTab.closed_at)){
+        alert("This table was closed after this bill, so the guests have left. The next group opens a tab by scanning the QR code.");
+        return;
+      }
+    }
+
+    // A walk-in keeps its name and its hidden slot; a normal table just reopens the table.
+    const row = {table_id:selectedTab.table_id, status:"open", total:0};
+    if(selectedTab.is_walkin){ row.is_walkin = true; row.walkin_name = selectedTab.walkin_name; }
     const {data:fresh,error} = await supabase.from("table_tabs")
-      .insert({table_id:selectedTab.table_id, status:"open", total:0})
-      .select().single();
-    if(error||!fresh){ alert("Could not start a new round."); return; }
+      .insert(row).select().single();
+    if(error||!fresh){
+      // Lost a race (the guest's phone started the round at the same moment): use theirs.
+      const winner = await openLive();
+      if(winner){ await loadTabs(); setSelectedTab(winner); return; }
+      alert("Could not start a new round. Please try again.");
+      return;
+    }
 
     await logAudit("new_round","table_tabs",fresh.id,
       {table_id:selectedTab.table_id, previous_tab:selectedTab.id},"cashier");
@@ -632,7 +668,7 @@ export default function Cashier(){
                 <div style={{display:"flex",gap:8}}>
                   {/* PAID tabs are final. The only action left is to start a
                       brand-new round for this table — the receipt is untouched. */}
-                  {selectedTab.status==="closed"&&(
+                  {selectedTab.status==="closed"&&!tabs.some(t=>t.table_id===selectedTab.table_id&&t.id!==selectedTab.id&&new Date(t.opened_at)>new Date(selectedTab.opened_at))&&(
                     <button onClick={startNewRound}
                       title="Table has paid but wants to keep ordering — opens a NEW tab. The paid receipt is not changed."
                       style={{padding:"8px 16px",background:"rgba(52,211,153,0.08)",border:"1px solid rgba(52,211,153,0.3)",borderRadius:9,cursor:"pointer",fontSize:13,color:"#34D399",fontWeight:600,fontFamily:"Inter,sans-serif"}}>
@@ -1130,20 +1166,25 @@ export default function Cashier(){
                   staff can't forget to close a table when guests leave. This is the
                   fix for departed guests still being able to order from home. */}
               <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                <button onClick={()=>{ const r=receiptModal; setReceiptModal(null); closeTableAfterPay(r); }}
-                  style={{width:"100%",padding:12,fontSize:14,fontWeight:700,borderRadius:10,cursor:"pointer",
-                    background:"#F87171",border:"none",color:"#160707",fontFamily:"Inter,sans-serif"}}>
-                  🔒 Guests left — Close Table
-                </button>
                 <button onClick={()=>setReceiptModal(null)}
-                  style={{width:"100%",padding:12,fontSize:14,fontWeight:600,borderRadius:10,cursor:"pointer",
-                    background:SURFACE2,border:`1px solid ${BORDER}`,color:"#e8e0d0",fontFamily:"Inter,sans-serif"}}>
-                  Staying — keep table open
+                  style={{width:"100%",padding:13,fontSize:14,fontWeight:700,borderRadius:10,cursor:"pointer",
+                    background:"rgba(52,211,153,0.12)",border:"1px solid rgba(52,211,153,0.45)",color:"#34D399",fontFamily:"Inter,sans-serif"}}>
+                  ✅ Guests staying — keep table open (new round)
+                </button>
+                <button onClick={()=>{
+                    const r=receiptModal;
+                    const label=r.walkin_name?r.walkin_name:`table ${r.table_id}`;
+                    if(!window.confirm(`Close ${label}?\n\nTheir phones are locked out and must scan the QR code again to order. Only do this if the guests have LEFT.`)) return;
+                    setReceiptModal(null); closeTableAfterPay(r);
+                  }}
+                  style={{width:"100%",padding:10,fontSize:13,fontWeight:600,borderRadius:10,cursor:"pointer",
+                    background:"rgba(248,113,113,0.06)",border:"1px solid rgba(248,113,113,0.3)",color:"#F87171",fontFamily:"Inter,sans-serif"}}>
+                  🔒 Guests left — Close Table
                 </button>
               </div>
               <div style={{fontSize:10.5,color:"#444",marginTop:10,textAlign:"center",lineHeight:1.5}}>
-                Close Table locks their phones out so they can't order after leaving.<br/>
-                Keep open if they're ordering another round.
+                Keep open if they will order another round. Close Table locks their phones out,<br/>
+                so only use it when everyone has left.
               </div>
             </div>
           </div>

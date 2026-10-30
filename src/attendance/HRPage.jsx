@@ -437,6 +437,23 @@ function StaffTab() {
     else load();
   }
 
+  async function remove(r) {
+    setErr(""); setOk("");
+    if (!window.confirm(`Delete ${r.name}'s account?\n\nThis cannot be undone. If they have attendance records you will be asked again.`)) return;
+    const first = await sb.rpc("attendance_hr_delete_staff", { p_staff: r.id, p_with_history: false });
+    if (first.error) { setErr("Could not delete. The delete option may not be set up yet (run attendance-delete.sql in Supabase)."); return; }
+    let res = first.data;
+    if (res && res.ok === false && res.error === "has_history") {
+      const typed = window.prompt(`${r.name} has ${res.logs} attendance record${res.logs === 1 ? "" : "s"}.\n\nTo keep the history, cancel and use Deactivate instead.\n\nTo delete the account AND all its records for good, type DELETE below.`);
+      if (typed !== "DELETE") { setOk("Nothing was deleted."); return; }
+      const second = await sb.rpc("attendance_hr_delete_staff", { p_staff: r.id, p_with_history: true });
+      if (second.error) { setErr("Could not delete."); return; }
+      res = second.data;
+    }
+    if (res && res.ok) { setOk(`${r.name} was deleted.`); load(); }
+    else setErr("Could not delete.");
+  }
+
   return (
     <div>
       <form onSubmit={add} style={{ ...ui.card, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
@@ -478,6 +495,7 @@ function StaffTab() {
           )}
           <button style={ui.ghost} onClick={() => resetPin(r)}>Reset PIN</button>
           <button style={ui.ghost} onClick={() => toggle(r)}>{r.active ? "Deactivate" : "Activate"}</button>
+          <button style={{ ...ui.ghost, color: "#F87171", borderColor: "rgba(248,113,113,0.35)" }} onClick={() => remove(r)}>Delete</button>
         </div>
       ))}
     </div>

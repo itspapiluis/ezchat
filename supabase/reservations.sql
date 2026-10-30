@@ -23,6 +23,9 @@ create table if not exists reservation_settings (
   hold_minutes int not null default 30,
   max_active_per_phone int not null default 2
 );
+-- auto-release: when ON (default) a 'booked' table is released once its hold runs out.
+-- When OFF nothing expires by itself; staff mark Arrived / No-show / Cancel.
+alter table reservation_settings add column if not exists auto_release boolean not null default true;
 insert into reservation_settings (id) values (1) on conflict (id) do nothing;
 
 create table if not exists reservation_tables (
@@ -81,10 +84,15 @@ create or replace function reservation_hold() returns int
 language sql stable security definer set search_path = public as $$
   select coalesce((select hold_minutes from reservation_settings where id = 1), 30) $$;
 
+create or replace function reservation_auto_release() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select auto_release from reservation_settings where id = 1), true) $$;
+
 -- what the booking really is right now: a 'booked' one past its hold counts as expired
+-- (only while auto-release is ON)
 create or replace function reservation_eff(p_status text, p_date date, p_time time) returns text
 language sql stable security definer set search_path = public as $$
-  select case when p_status = 'booked'
+  select case when p_status = 'booked' and reservation_auto_release()
               and (p_date + p_time) + make_interval(mins => reservation_hold()) < reservation_now()
          then 'expired' else p_status end $$;
 
@@ -123,6 +131,7 @@ begin
   return jsonb_build_object(
     'enabled', reservation_enabled(),
     'hold_minutes', reservation_hold(),
+    'auto_release', reservation_auto_release(),
     'min_date', t,
     'max_date', (date_trunc('month', t) + interval '1 month' - interval '1 day')::date,
     'now', to_char(reservation_now(), 'YYYY-MM-DD"T"HH24:MI:SS'),
@@ -166,7 +175,7 @@ begin
 
   -- release a no-show whose hold ran out, so the table can be booked again
   update reservations set status = 'expired', updated_at = now()
-   where table_id = p_table and res_date = p_date and status = 'booked'
+   where table_id = p_table and res_date = p_date and status = 'booked' and reservation_auto_release()
      and (res_date + res_time) + make_interval(mins => reservation_hold()) < reservation_now();
 
   select count(*) into active from reservations
@@ -285,7 +294,7 @@ begin
   if p_guests is null or p_guests < 1 or p_guests > cap then return jsonb_build_object('ok', false, 'error', 'guests', 'max', cap); end if;
   if p_date is null or p_date < reservation_now()::date then return jsonb_build_object('ok', false, 'error', 'date'); end if;
   update reservations set status = 'expired', updated_at = now()
-   where table_id = p_table and res_date = p_date and status = 'booked'
+   where table_id = p_table and res_date = p_date and status = 'booked' and reservation_auto_release()
      and (res_date + res_time) + make_interval(mins => reservation_hold()) < reservation_now();
   loop
     n := n + 1; c := reservation_gen_code();
@@ -310,7 +319,17 @@ begin
   return jsonb_build_object('ok', true, 'enabled', coalesce(p_enabled, false));
 end $$;
 
+create or replace function reservation_admin_set_auto_release(p_pin text, p_on boolean) returns jsonb
+language plpgsql security definer set search_path = public as $$
+begin
+  if not reservation_admin_ok(p_pin) then raise exception 'forbidden'; end if;
+  update reservation_settings set auto_release = coalesce(p_on, true) where id = 1;
+  return jsonb_build_object('ok', true, 'auto_release', coalesce(p_on, true));
+end $$;
+
 grant execute on function reservation_enabled() to anon, authenticated;
+grant execute on function reservation_auto_release() to anon, authenticated;
+grant execute on function reservation_admin_set_auto_release(text, boolean) to anon, authenticated;
 grant execute on function reservation_public_config() to anon, authenticated;
 grant execute on function reservation_taken(date) to anon, authenticated;
 grant execute on function reservation_create(date, time, text, text, text, int) to anon, authenticated;

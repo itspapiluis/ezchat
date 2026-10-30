@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAdminPin, setAdminPin, clearAdminPin } from "./adminSession.js";
 import {
-  adminList, adminSet, adminMove, adminCreate, adminSetEnabled, getEnabled, getConfig,
+  adminList, adminSet, adminMove, adminCreate, adminSetEnabled, getEnabled, getConfig, getAutoRelease, adminSetAutoRelease,
   errText, fmtTime, fmtDateShort, fmtDateLong, fmtPhone, SLOTS,
 } from "./api.js";
 
@@ -49,6 +49,7 @@ export default function AdminReservations() {
   const [rows, setRows] = useState([]);
   const [tables, setTables] = useState([]);
   const [enabled, setEnabled] = useState(null);
+  const [autoRel, setAutoRel] = useState(null);
   const [q, setQ] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -80,8 +81,9 @@ export default function AdminReservations() {
   }, [pin, load]);
   useEffect(() => {
     (async () => {
-      const [e, c] = await Promise.all([getEnabled(), getConfig()]);
+      const [e, c, a] = await Promise.all([getEnabled(), getConfig(), getAutoRelease()]);
       if (e.ok) setEnabled(e.data === true);
+      if (a.ok && typeof a.data === "boolean") setAutoRel(a.data);
       if (c.ok) setTables(c.data.tables || []);
     })();
   }, []);
@@ -140,6 +142,21 @@ export default function AdminReservations() {
         </button>
       </div>
 
+      {/* auto-release switch */}
+      <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 14, marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>Auto-release: <span style={{ color: autoRel ? "#34D399" : "#FBBF24" }}>{autoRel === null ? "…" : autoRel ? "ON" : "OFF"}</span></div>
+          <div style={{ fontSize: 12, color: "#777", marginTop: 2, lineHeight: 1.5 }}>
+            {autoRel === false
+              ? "Bookings stay until you mark Arrived, No-show or Cancel. Tables are NOT released by themselves, so online guests cannot take a table you have not cleared."
+              : "A booking is released 30 minutes after its time. Turn OFF to keep every booking (including ones staff entered) until you clear it."}
+          </div>
+        </div>
+        <button style={ghost} disabled={autoRel === null} onClick={async () => { if (autoRel && !window.confirm("Turn Auto-release OFF?\n\nBookings will never expire by themselves. You must mark Arrived, No-show or Cancel on each one.")) return; const ok = await act(() => adminSetAutoRelease(pin, !autoRel)); if (ok) setAutoRel(!autoRel); }}>
+          {autoRel ? "Turn OFF" : "Turn ON"}
+        </button>
+      </div>
+
       {/* date controls */}
       <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 14, marginBottom: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         <button style={ghost} onClick={() => setDate(addDays(date, range === "day" ? -1 : -30))} aria-label="Previous">←</button>
@@ -194,6 +211,7 @@ export default function AdminReservations() {
                   {live && <button style={ghost} onClick={() => setMoving(r)}>Move table</button>}
                   {live && <button style={ghost} onClick={() => { if (window.confirm(`Cancel ${r.guest_name}'s booking for ${r.table_id}?`)) act(() => adminSet(pin, r.id, "cancelled")); }}>Cancel</button>}
                   {!live && r.status !== "expired" && <button style={ghost} onClick={() => act(() => adminSet(pin, r.id, "booked"), "Booking restored.")}>Undo</button>}
+                  {r.status === "expired" && <button style={{ ...ghost, opacity: autoRel === false ? 1 : 0.5 }} title={autoRel === false ? "" : "Turn Auto-release OFF first, or it expires again straight away"} onClick={() => { if (autoRel !== false) { setMsg("Turn Auto-release OFF first, then Restore. Otherwise it expires again straight away."); return; } act(() => adminSet(pin, r.id, "booked"), "Booking restored."); }}>Restore</button>}
                 </div>
               </div>
             );
