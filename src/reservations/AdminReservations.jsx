@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getAdminPin, setAdminPin, clearAdminPin } from "./adminSession.js";
 import {
-  adminList, adminSet, adminMove, adminCreate, adminSetEnabled, getEnabled, getConfig, getAutoRelease, adminSetAutoRelease,
+  adminList, adminSet, adminMove, adminCreate, adminSetEnabled, getEnabled, getConfig, getAutoRelease, adminSetAutoRelease, adminSetOpenUntil,
   errText, fmtTime, fmtDateShort, fmtDateLong, fmtPhone, SLOTS,
 } from "./api.js";
 
@@ -36,6 +36,10 @@ const addDays = (iso, n) => {
   const t = new Date(Date.UTC(y, m - 1, d + n, 12));
   return t.toISOString().slice(0, 10);
 };
+const nextMonthEnd = (iso) => {
+  const [y, m] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m + 1, 0, 12)).toISOString().slice(0, 10);
+};
 const monthEnd = (iso) => {
   const [y, m] = iso.split("-").map(Number);
   return new Date(Date.UTC(y, m, 0, 12)).toISOString().slice(0, 10);
@@ -50,6 +54,8 @@ export default function AdminReservations() {
   const [tables, setTables] = useState([]);
   const [enabled, setEnabled] = useState(null);
   const [autoRel, setAutoRel] = useState(null);
+  const [maxDate, setMaxDate] = useState("");
+  const [untilIn, setUntilIn] = useState("");
   const [q, setQ] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
@@ -84,7 +90,7 @@ export default function AdminReservations() {
       const [e, c, a] = await Promise.all([getEnabled(), getConfig(), getAutoRelease()]);
       if (e.ok) setEnabled(e.data === true);
       if (a.ok && typeof a.data === "boolean") setAutoRel(a.data);
-      if (c.ok) setTables(c.data.tables || []);
+      if (c.ok) { setTables(c.data.tables || []); setMaxDate(c.data.max_date || ""); }
     })();
   }, []);
 
@@ -96,6 +102,12 @@ export default function AdminReservations() {
     if (okMsg) setMsg(okMsg);
     load();
     return true;
+  }
+
+  async function setWindow(d) {
+    if (d && !window.confirm(`Let guests book up to ${fmtDateLong(d)}?`)) return;
+    const ok = await act(() => adminSetOpenUntil(pin, d), d ? "Bookings are now open until " + fmtDateLong(d) + "." : "Bookings go back to closing at month end.");
+    if (ok) { const c = await getConfig(); if (c.ok) setMaxDate(c.data.max_date || ""); setUntilIn(""); }
   }
 
   const counts = useMemo(() => {
@@ -155,6 +167,22 @@ export default function AdminReservations() {
         <button style={ghost} disabled={autoRel === null} onClick={async () => { if (autoRel && !window.confirm("Turn Auto-release OFF?\n\nBookings will never expire by themselves. You must mark Arrived, No-show or Cancel on each one.")) return; const ok = await act(() => adminSetAutoRelease(pin, !autoRel)); if (ok) setAutoRel(!autoRel); }}>
           {autoRel ? "Turn OFF" : "Turn ON"}
         </button>
+      </div>
+
+      {/* booking window */}
+      <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 14, marginBottom: 12, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>Guests can book until: <span style={{ color: GOLD_LIGHT }}>{maxDate ? fmtDateLong(maxDate) : "…"}</span></div>
+          <div style={{ fontSize: 12, color: "#777", marginTop: 2, lineHeight: 1.5 }}>
+            {maxDate && maxDate > monthEnd(isoToday())
+              ? "Extended past the end of this month. Use Reset to go back to month end."
+              : "By default bookings close at the end of this month. Pick a later date to open ahead, for example for an event."}
+          </div>
+        </div>
+        <input type="date" aria-label="Open bookings until" value={untilIn} min={isoToday()} onChange={(e) => setUntilIn(e.target.value)} style={{ ...field, colorScheme: "dark" }} />
+        <button style={{ ...gold, opacity: untilIn ? 1 : 0.4 }} disabled={!untilIn} onClick={() => setWindow(untilIn)}>Save</button>
+        <button style={ghost} onClick={() => setWindow(nextMonthEnd(isoToday()))}>Open all of next month</button>
+        {maxDate && maxDate > monthEnd(isoToday()) && <button style={ghost} onClick={() => setWindow(null)}>Reset</button>}
       </div>
 
       {/* date controls */}
@@ -220,7 +248,7 @@ export default function AdminReservations() {
       ))}
 
       {moving && <MoveDialog row={moving} tables={tables} onClose={() => setMoving(null)} onMove={async (t) => { const ok = await act(() => adminMove(pin, moving.id, t), `Moved to ${t}.`); if (ok) setMoving(null); }} />}
-      {adding && <NewBooking tables={tables} defaultDate={date} onClose={() => setAdding(false)} onSave={async (b) => { const ok = await act(() => adminCreate(pin, b), "Booking added."); if (ok) setAdding(false); }} />}
+      {adding && <NewBooking autoRel={autoRel} tables={tables} defaultDate={date} onClose={() => setAdding(false)} onSave={async (b) => { const ok = await act(() => adminCreate(pin, b), "Booking added."); if (ok) setAdding(false); }} />}
     </div>
   );
 }
@@ -253,7 +281,7 @@ function MoveDialog({ row, tables, onClose, onMove }) {
   );
 }
 
-function NewBooking({ tables, defaultDate, onClose, onSave }) {
+function NewBooking({ tables, defaultDate, onClose, onSave, autoRel }) {
   const [b, setB] = useState({ date: defaultDate < isoToday() ? isoToday() : defaultDate, time: "19:00", table: "", name: "", phone: "", guests: 2 });
   const set = (k, v) => setB((x) => ({ ...x, [k]: v }));
   const ok = b.table && b.name.trim().length >= 2 && b.phone.replace(/\D/g, "").length >= 10 && b.guests >= 1;
@@ -270,6 +298,11 @@ function NewBooking({ tables, defaultDate, onClose, onSave }) {
         <input value={b.name} onChange={(e) => set("name", e.target.value)} maxLength={40} placeholder="Guest name" style={field} />
         <input value={b.phone} onChange={(e) => set("phone", e.target.value.replace(/[^\d+ ]/g, ""))} inputMode="tel" placeholder="Mobile number" style={field} />
       </div>
+      {autoRel && (
+        <div data-testid="admin-hold-warning" style={{ marginTop: 12, fontSize: 12.5, lineHeight: 1.55, color: "#fca5a5", background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.45)", borderRadius: 10, padding: "10px 12px" }}>
+          ⚠ Auto-release is ON: this booking is cancelled automatically 30 minutes after its time. Tell the guest to arrive on time, or turn Auto-release OFF.
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
         <button style={{ ...ghost, flex: 1 }} onClick={onClose}>Back</button>
         <button style={{ ...gold, flex: 1, opacity: ok ? 1 : 0.4 }} disabled={!ok} onClick={() => onSave(b)}>Save booking</button>

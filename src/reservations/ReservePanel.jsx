@@ -42,6 +42,22 @@ function normPhone(p) {
 }
 const todayStr = (cfg) => (cfg ? cfg.min_date : "");
 
+// Strong warning shown whenever Auto-release is ON: a late booking is cancelled by itself.
+function HoldWarning({ holdMin, time, compact }) {
+  let example = "";
+  if (time) {
+    const [h, m] = String(time).split(":").map(Number);
+    const end = h * 60 + m + holdMin;
+    example = ` For example, a ${fmtTime(time)} booking is released at ${fmtTime(`${Math.floor(end / 60) % 24}:${String(end % 60).padStart(2, "0")}`)}.`;
+  }
+  return (
+    <div role="alert" data-testid="hold-warning" style={{ background: "rgba(248,113,113,0.10)", border: "1px solid rgba(248,113,113,0.55)", borderRadius: 14, padding: "13px 15px", fontSize: compact ? 13 : 14, lineHeight: 1.6, color: "#fca5a5", marginBottom: 14 }}>
+      <div style={{ fontWeight: 800, color: "#F87171", marginBottom: 4, letterSpacing: 0.5 }}>⚠ IMPORTANT: LATE = AUTO-CANCELLED</div>
+      Your reservation is <b>cancelled automatically {holdMin} minutes after your reservation time</b>, and the table may go to other guests.{example} Running late? Call or message us before then.
+    </div>
+  );
+}
+
 export default function ReservePanel({ onClose }) {
   const [cfg, setCfg] = useState(null);
   const [loadErr, setLoadErr] = useState("");
@@ -162,7 +178,7 @@ export default function ReservePanel({ onClose }) {
         </div>
         {children}
       </div>
-      {manage && <ManageBooking onClose={() => setManage(false)} onChanged={loadTaken} />}
+      {manage && <ManageBooking onClose={() => setManage(false)} onChanged={loadTaken} autoRel={autoRel} />}
     </div>
   );
 
@@ -200,9 +216,11 @@ export default function ReservePanel({ onClose }) {
           ))}
           {t && <div style={{ fontSize: 13, color: "#aaa", marginTop: 12 }}>{peso(t.consumable)} consumable{t.note ? ` · ${t.note}` : ""}</div>}
         </div>
-        <div style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 14, padding: "13px 15px", fontSize: 13.5, color: "#e9c27a", lineHeight: 1.6, marginBottom: 16 }}>
-          ⏱ {holdNote(done.res_time)}
-        </div>
+        {autoRel ? <HoldWarning holdMin={holdMin} time={done.res_time} /> : (
+          <div style={{ background: "rgba(245,158,11,0.07)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: 14, padding: "13px 15px", fontSize: 13.5, color: "#e9c27a", lineHeight: 1.6, marginBottom: 16 }}>
+            ⏱ {holdNote(done.res_time)}
+          </div>
+        )}
         <button style={goldBtn} onClick={onClose}>Done</button>
         <button style={{ ...ghostBtn, marginTop: 10 }} onClick={() => { setDone(null); setSelected(""); setTime(""); loadTaken(); }}>Book another table</button>
       </div>
@@ -217,6 +235,7 @@ export default function ReservePanel({ onClose }) {
   return shell(
     <>
       <div style={card}>
+        {autoRel && <HoldWarning holdMin={holdMin} />}
         <div style={{ fontSize: 13, color: "#999", lineHeight: 1.6, marginBottom: 14 }}>
           Reserve any day from today until <b style={{ color: GOLD }}>{fmtDateLong(cfg.max_date).replace(/, \d{4}$/, "")}</b>. Reservations accepted from 6 PM to 10:30 PM.
         </div>
@@ -283,7 +302,7 @@ export default function ReservePanel({ onClose }) {
       </div>
 
       <div style={{ ...card, background: "rgba(245,158,11,0.05)", border: "1px solid rgba(245,158,11,0.25)", color: "#e1be7d", fontSize: 13, lineHeight: 1.6 }}>
-        ⏱ {autoRel ? <>Your table is held for <b>{holdMin} minutes</b> after your reservation time. After that it may be released to other guests.</> : "Please arrive on time. If you will be late, call or message us so we can keep your table."}
+        {autoRel ? null : "⏱ Please arrive on time. If you will be late, call or message us so we can keep your table. "}
         Prices are consumable amounts (what you spend on food and drinks).
       </div>
 
@@ -317,7 +336,9 @@ export default function ReservePanel({ onClose }) {
               </div>
             ))}
             {sel.note && <div style={{ fontSize: 12.5, color: "#999", marginTop: 10 }}>{sel.note}</div>}
-            <div style={{ fontSize: 12.5, color: "#e1be7d", background: "rgba(245,158,11,0.07)", borderRadius: 10, padding: "10px 12px", margin: "14px 0", lineHeight: 1.55 }}>⏱ {holdNote(time)}</div>
+            {autoRel
+              ? <div style={{ marginTop: 14 }}><HoldWarning holdMin={holdMin} time={time} compact /></div>
+              : <div style={{ fontSize: 12.5, color: "#e1be7d", background: "rgba(245,158,11,0.07)", borderRadius: 10, padding: "10px 12px", margin: "14px 0", lineHeight: 1.55 }}>⏱ {holdNote(time)}</div>}
             <button style={{ ...goldBtn, opacity: busy ? 0.6 : 1 }} disabled={busy} onClick={submit}>{busy ? "Booking…" : "Confirm reservation"}</button>
             <button style={{ ...ghostBtn, marginTop: 10 }} disabled={busy} onClick={() => setConfirming(false)}>Go back</button>
           </div>
@@ -328,7 +349,7 @@ export default function ReservePanel({ onClose }) {
 }
 
 // ── look up / cancel a booking with its code ──
-function ManageBooking({ onClose, onChanged }) {
+function ManageBooking({ onClose, onChanged, autoRel }) {
   const [code, setCode] = useState("");
   const [p4, setP4] = useState("");
   const [res, setRes] = useState(null);
@@ -372,6 +393,7 @@ function ManageBooking({ onClose, onChanged }) {
             <div style={{ fontSize: 14, color: "#ccc", margin: "4px 0" }}>{fmtDateLong(res.res_date)} · {fmtTime(res.res_time)}</div>
             <div style={{ fontSize: 13.5, color: "#999" }}>{res.guests} guests · {res.name}</div>
             <div data-testid="manage-status" style={{ fontSize: 13, marginTop: 8, color: res.status === "booked" ? "#34D399" : "#F59E0B" }}>{statusText[res.status] || res.status}</div>
+            {res.status === "booked" && autoRel && <div style={{ marginTop: 10 }}><HoldWarning holdMin={res.hold_minutes || 30} time={res.res_time} compact /></div>}
             {res.status === "booked" && !sure && <button style={{ ...ghostBtn, marginTop: 12, color: "#F87171", borderColor: "rgba(248,113,113,0.4)" }} onClick={() => setSure(true)}>Cancel this booking</button>}
             {res.status === "booked" && sure && (
               <div style={{ marginTop: 12 }}>

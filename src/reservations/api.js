@@ -29,6 +29,7 @@ export const adminCreate = (pin, b) =>
   rpc("reservation_admin_create", { p_pin: pin, p_date: b.date, p_time: b.time, p_table: b.table, p_name: b.name, p_phone: b.phone, p_guests: b.guests });
 export const adminSetEnabled = (pin, on) => rpc("reservation_admin_set_enabled", { p_pin: pin, p_enabled: on });
 export const getEnabled = () => rpc("reservation_enabled");
+export const adminSetOpenUntil = (pin, date) => rpc("reservation_admin_set_open_until", { p_pin: pin, p_date: date });
 export const getAutoRelease = () => rpc("reservation_auto_release");
 export const adminSetAutoRelease = (pin, on) => rpc("reservation_admin_set_auto_release", { p_pin: pin, p_on: on });
 
@@ -38,7 +39,8 @@ export const ERROR_TEXT = {
   phone: "Enter a valid mobile number, for example 0917 123 4567.",
   table: "That table is not available for booking.",
   guests: "That table is too small for your group. Pick a bigger one.",
-  date: "Reservations are open from today until the end of this month.",
+  date: "That date is outside the booking window. Please pick a date shown on the calendar.",
+  window: "Pick a date from today up to one year ahead.",
   time: "Pick an arrival time between 6:00 PM and 10:30 PM.",
   past: "That time has already passed. Pick a later time.",
   taken: "Someone just reserved that table. Please pick another one.",
